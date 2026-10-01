@@ -13,6 +13,7 @@ export 'widgets/app_otp_input.dart';
 export 'widgets/app_password_field.dart';
 export 'widgets/app_primary_button.dart';
 export 'widgets/app_remote_icon.dart';
+export 'widgets/app_skeleton.dart';
 export 'widgets/app_social_button.dart';
 export 'widgets/app_text_field.dart';
 export 'widgets/app_top_bar.dart';

@@ -2,10 +2,11 @@ import 'package:drift/drift.dart';
 
 import '../app_database.dart';
 import '../tables/categories_table.dart';
+import '../tables/subcategories_table.dart';
 
 part 'categories_dao.g.dart';
 
-@DriftAccessor(tables: [Categories])
+@DriftAccessor(tables: [Categories, Subcategories])
 class CategoriesDao extends DatabaseAccessor<AppDatabase>
     with _$CategoriesDaoMixin {
   CategoriesDao(super.attachedDatabase);
@@ -34,4 +35,18 @@ class CategoriesDao extends DatabaseAccessor<AppDatabase>
           updatedAt: Value(DateTime.now()),
         ),
       );
+
+  /// Makes every category and subcategory visible again.
+  Future<void> showAll() => transaction(() async {
+    final now = DateTime.now();
+    await update(categories).write(
+      CategoriesCompanion(isSelected: const Value(true), updatedAt: Value(now)),
+    );
+    await update(subcategories).write(
+      SubcategoriesCompanion(
+        isSelected: const Value(true),
+        updatedAt: Value(now),
+      ),
+    );
+  });
 }

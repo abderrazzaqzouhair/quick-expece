@@ -127,10 +127,55 @@ void main() {
         ('Food & Drinks', 450, 1),
       ]);
 
+      final latestTwo = await db.expensesDao.watchDetails(limit: 2).first;
+      expect(latestTwo.map((d) => d.expense.amountCents), [999, 1500]);
+
       final transportOnly = await db.expensesDao
           .watchDetails(categoryId: CatalogueSeeder.categoryId('Transport'))
           .first;
       expect(transportOnly, hasLength(3));
+    });
+  });
+
+  group('profile support', () {
+    test('summary, delete all, show all', () async {
+      final empty = await db.expensesDao.watchSummary().first;
+      expect(empty.count, 0);
+      expect(empty.firstDate, isNull);
+
+      await db.expensesDao.add(
+        subcategoryId: sub('Transport', 'Bus'),
+        amountCents: 200,
+        date: DateTime(2026, 9, 3),
+      );
+      await db.expensesDao.add(
+        subcategoryId: sub('Transport', 'Taxi'),
+        amountCents: 1300,
+        date: DateTime(2026, 8, 20),
+      );
+      final summary = await db.expensesDao.watchSummary().first;
+      expect(summary.count, 2);
+      expect(summary.totalCents, 1500);
+      expect(summary.firstDate, DateTime(2026, 8, 20));
+
+      expect(await db.expensesDao.softDeleteAll(), 2);
+      expect((await db.expensesDao.watchSummary().first).count, 0);
+
+      final travel = CatalogueSeeder.categoryId('Travel');
+      await db.categoriesDao.setSelected(travel, selected: false);
+      await db.subcategoriesDao.setSelected(
+        sub('Transport', 'Bus'),
+        selected: false,
+      );
+      await db.categoriesDao.showAll();
+      expect((await db.categoriesDao.findById(travel))!.isSelected, isTrue);
+      expect(
+        (await db.subcategoriesDao.findById(
+          sub('Transport', 'Bus'),
+        ))!.isSelected,
+        isTrue,
+      );
+      expect(await db.subcategoriesDao.watchAll().first, hasLength(72));
     });
   });
 }

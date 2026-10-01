@@ -27,6 +27,14 @@ class SubcategoriesDao extends DatabaseAccessor<AppDatabase>
     return query.watch();
   }
 
+  /// Every active, non-deleted subcategory (all categories), by name.
+  Stream<List<SubcategoryRow>> watchAll() {
+    final query = select(subcategories)
+      ..where((s) => s.isActive.equals(true) & s.deletedAt.isNull())
+      ..orderBy([(s) => OrderingTerm.asc(s.name)]);
+    return query.watch();
+  }
+
   Future<SubcategoryRow?> findById(String id) =>
       (select(subcategories)..where((s) => s.id.equals(id))).getSingleOrNull();
 

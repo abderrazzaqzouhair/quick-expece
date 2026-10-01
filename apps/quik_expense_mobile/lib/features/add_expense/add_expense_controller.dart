@@ -1,59 +1,48 @@
 import 'package:core/core.dart';
+import 'package:database/database.dart';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import '../../config/providers/database_providers.dart';
+import 'logic/amount_entry.dart';
 
-/// Form state of the add-expense screen. Only the parts that drive the UI
-/// live here — the note stays in its `TextEditingController` and is passed
-/// to [AddExpenseController.save].
+/// What the user still has to do before the expense can be saved — drives
+/// the save button's label and what tapping it does.
+enum AddExpenseStep { enterAmount, chooseCategory, ready }
+
 @immutable
 class AddExpenseState {
   const AddExpenseState({
     required this.day,
-    this.amountCents,
-    this.categoryId,
-    this.subcategoryId,
+    this.amountText = '',
+    this.category,
+    this.subcategory,
+    this.note = '',
     this.isSaving = false,
   });
 
-  /// `null` while the amount field is empty or invalid.
-  final int? amountCents;
-  final String? categoryId;
-  final String? subcategoryId;
+  /// Raw keypad text, e.g. `"42.5"` (see [AmountEntry]).
+  final String amountText;
+  final CategoryRow? category;
+  final SubcategoryRow? subcategory;
 
-  /// The day the expense happened (time part ignored — see [expenseDate]).
+  /// The day the expense happened (date only — see [expenseDate]).
   final DateTime day;
+  final String note;
   final bool isSaving;
 
-  static const _unset = Object();
+  int? get amountCents => Money.parseCents(amountText);
 
-  /// Nullable fields use a sentinel so they can be explicitly cleared:
-  /// `copyWith(subcategoryId: null)`.
-  AddExpenseState copyWith({
-    Object? amountCents = _unset,
-    Object? categoryId = _unset,
-    Object? subcategoryId = _unset,
-    DateTime? day,
-    bool? isSaving,
-  }) => AddExpenseState(
-    amountCents: identical(amountCents, _unset)
-        ? this.amountCents
-        : amountCents as int?,
-    categoryId: identical(categoryId, _unset)
-        ? this.categoryId
-        : categoryId as String?,
-    subcategoryId: identical(subcategoryId, _unset)
-        ? this.subcategoryId
-        : subcategoryId as String?,
-    day: day ?? this.day,
-    isSaving: isSaving ?? this.isSaving,
-  );
+  bool get isAmountValid {
+    final cents = amountCents;
+    return cents != null && cents > 0 && cents <= Money.maxCents;
+  }
 
-  bool get isAmountValid =>
-      amountCents != null && amountCents! > 0 && amountCents! <= Money.maxCents;
-
-  bool get canSave => isAmountValid && subcategoryId != null && !isSaving;
+  AddExpenseStep get step {
+    if (!isAmountValid) return AddExpenseStep.enterAmount;
+    if (subcategory == null) return AddExpenseStep.chooseCategory;
+    return AddExpenseStep.ready;
+  }
 
   /// [day] with the current time of day, so expenses added the same day keep
   /// their order in lists.
@@ -68,6 +57,22 @@ class AddExpenseState {
       now.second,
     );
   }
+
+  AddExpenseState copyWith({
+    String? amountText,
+    CategoryRow? category,
+    SubcategoryRow? subcategory,
+    DateTime? day,
+    String? note,
+    bool? isSaving,
+  }) => AddExpenseState(
+    amountText: amountText ?? this.amountText,
+    category: category ?? this.category,
+    subcategory: subcategory ?? this.subcategory,
+    day: day ?? this.day,
+    note: note ?? this.note,
+    isSaving: isSaving ?? this.isSaving,
+  );
 }
 
 final addExpenseControllerProvider =
@@ -77,45 +82,45 @@ final addExpenseControllerProvider =
 
 class AddExpenseController extends Notifier<AddExpenseState> {
   @override
-  AddExpenseState build() => AddExpenseState(day: _today());
-
-  static DateTime _today() {
+  AddExpenseState build() {
     final now = DateTime.now();
-    return DateTime(now.year, now.month, now.day);
+    return AddExpenseState(day: DateTime(now.year, now.month, now.day));
   }
 
-  void setAmount(String input) =>
-      state = state.copyWith(amountCents: Money.parseCents(input));
-
-  /// Changing the category clears the subcategory — it belonged to the old
-  /// one. Tapping the selected category again keeps it.
-  void selectCategory(String categoryId) {
-    if (categoryId == state.categoryId) return;
-    state = state.copyWith(categoryId: categoryId, subcategoryId: null);
+  /// Applies a keypad press. Returns `false` if the key was rejected (the
+  /// screen shakes the amount).
+  bool pressKey(AmountKey key) {
+    final next = AmountEntry.press(state.amountText, key);
+    if (next == null) return false;
+    state = state.copyWith(amountText: next);
+    return true;
   }
 
-  void selectSubcategory(String subcategoryId) =>
-      state = state.copyWith(subcategoryId: subcategoryId);
+  void clearAmount() => state = state.copyWith(amountText: '');
+
+  void selectSubcategory(CategoryRow category, SubcategoryRow subcategory) =>
+      state = state.copyWith(category: category, subcategory: subcategory);
 
   void selectDay(DateTime day) =>
       state = state.copyWith(day: DateTime(day.year, day.month, day.day));
 
+  void setNote(String note) => state = state.copyWith(note: note.trim());
+
   /// Saves the expense. Returns `true` on success; throws on a database
   /// error (the screen shows it).
-  Future<bool> save({String? note}) async {
-    if (!state.canSave) return false;
+  Future<bool> save() async {
     final current = state;
+    if (current.step != AddExpenseStep.ready || current.isSaving) return false;
     state = current.copyWith(isSaving: true);
     try {
-      final trimmed = note?.trim();
       await ref
           .read(appDatabaseProvider)
           .expensesDao
           .add(
-            subcategoryId: current.subcategoryId!,
+            subcategoryId: current.subcategory!.id,
             amountCents: current.amountCents!,
             date: current.expenseDate,
-            note: (trimmed == null || trimmed.isEmpty) ? null : trimmed,
+            note: current.note.isEmpty ? null : current.note,
           );
       return true;
     } finally {

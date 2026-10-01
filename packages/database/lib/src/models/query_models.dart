@@ -26,3 +26,18 @@ class CategoryTotal {
   final int totalCents;
   final int count;
 }
+
+/// All-time overview of non-deleted expenses (profile stats).
+class ExpenseSummary {
+  const ExpenseSummary({
+    required this.count,
+    required this.totalCents,
+    this.firstDate,
+  });
+
+  final int count;
+  final int totalCents;
+
+  /// Date of the oldest expense; `null` when there are none.
+  final DateTime? firstDate;
+}

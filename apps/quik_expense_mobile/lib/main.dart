@@ -3,9 +3,12 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:localization/localization.dart';
 import 'package:networking/networking.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:ui_kit/ui_kit.dart';
 
+import 'config/providers/preferences_providers.dart';
 import 'config/router/app_router.dart';
+import 'shared/haptics.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -25,7 +28,16 @@ Future<void> main() async {
     userId: 'mock-user-id',
   );
 
-  runApp(const ProviderScope(child: QuikExpenseApp()));
+  final prefs = await SharedPreferences.getInstance();
+  // Applied before the first frame so early taps already respect it.
+  Haptics.enabled = prefs.getBool('settings.haptics') ?? true;
+
+  runApp(
+    ProviderScope(
+      overrides: [sharedPreferencesProvider.overrideWithValue(prefs)],
+      child: const QuikExpenseApp(),
+    ),
+  );
 }
 
 class QuikExpenseApp extends StatelessWidget {

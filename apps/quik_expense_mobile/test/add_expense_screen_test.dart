@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:go_router/go_router.dart';
 import 'package:quik_expense_mobile/config/providers/database_providers.dart';
 import 'package:quik_expense_mobile/features/add_expense/add_expense_screen.dart';
+import 'package:ui_kit/ui_kit.dart' show AppSkeleton;
 
 void main() {
   late AppDatabase db;
@@ -17,10 +18,10 @@ void main() {
 
   /// Home stub → pushes the screen, like the bottom-nav "create" button.
   Future<void> pumpScreen(WidgetTester tester) async {
-    // Tall phone-sized screen so the whole (lazily built) form is on screen.
     tester.view
-      ..physicalSize = const Size(1080, 2400)
-      ..devicePixelRatio = 2.5;
+      ..physicalSize =
+          const Size(1179, 2556) // iPhone 15
+      ..devicePixelRatio = 3;
     addTearDown(tester.view.reset);
 
     final router = GoRouter(
@@ -47,62 +48,122 @@ void main() {
     await settleDb(tester);
   }
 
-  testWidgets('saves an expense and pops back', (tester) async {
+  testWidgets('keypad → category sheet → save', (tester) async {
     await pumpScreen(tester);
-    expect(find.text('New expense'), findsOneWidget);
-    expect(saveEnabled(tester), isFalse);
+    expect(find.text('New Expense'), findsOneWidget);
+    expect(find.text('Enter an amount'), findsOneWidget);
 
-    await tester.enterText(find.byType(TextField).first, '42,5');
-    await tapChip(tester, 'Transport');
+    await typeAmount(tester, '1250.5');
+    expect(find.text('1,250.5'), findsOneWidget);
+    expect(find.text('Choose a category'), findsOneWidget);
+
+    // The guiding button opens the category sheet.
+    await tester.tap(find.text('Choose a category'));
     await settleDb(tester);
-    expect(saveEnabled(tester), isFalse); // no subcategory yet
-
-    await tapChip(tester, 'Bus');
-    final noteField = find.byType(TextFormField);
-    await tester.scrollUntilVisible(
-      noteField,
-      200,
-      scrollable: _formScrollable,
-    );
-    await tester.enterText(noteField, '  Commute  ');
+    await tester.tap(find.text('Transport'));
+    await settleDb(tester);
+    await tester.tap(find.text('Bus'));
     await tester.pumpAndSettle();
-    expect(saveEnabled(tester), isTrue);
 
-    await tester.tap(find.text('Save expense'));
+    expect(find.text('Bus'), findsOneWidget); // shown in the category field
+    expect(find.text('Save  ·  1,250.50 MAD'), findsOneWidget);
+
+    await tester.tap(find.text('Save  ·  1,250.50 MAD'));
     await settleDb(tester);
 
     expect(find.text('open'), findsOneWidget); // popped
-    expect(find.text('Expense added'), findsOneWidget);
+    expect(find.text('1,250.50 MAD · Bus saved'), findsOneWidget);
 
     final saved = (await tester.runAsync(
       () => db.expensesDao.watchDetails().first,
     ))!;
     expect(saved, hasLength(1));
-    expect(saved.single.expense.amountCents, 4250);
-    expect(saved.single.expense.note, 'Commute');
+    expect(saved.single.expense.amountCents, 125050);
     expect(saved.single.subcategory.name, 'Bus');
     expect(saved.single.category.name, 'Transport');
 
     await disposeTree(tester);
   });
 
-  testWidgets('switching category clears the subcategory', (tester) async {
+  testWidgets('note and date are saved', (tester) async {
     await pumpScreen(tester);
-    await tester.enterText(find.byType(TextField).first, '10');
-    await tapChip(tester, 'Transport');
-    await settleDb(tester);
-    await tapChip(tester, 'Taxi');
-    await tester.pumpAndSettle();
-    expect(saveEnabled(tester), isTrue);
+    await typeAmount(tester, '9');
 
-    await tapChip(tester, 'Travel');
+    await tester.tap(find.text('Add note'));
+    await tester.pumpAndSettle();
+    await tester.enterText(find.byType(TextField), '  Coffee with Ali ');
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Coffee with Ali'), findsOneWidget);
+
+    await tester.tap(find.text('Today'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Yesterday'));
+    await tester.tap(find.text('Done'));
+    await tester.pumpAndSettle();
+    expect(find.text('Yesterday'), findsOneWidget);
+
+    await tester.tap(find.text('Choose a category'));
     await settleDb(tester);
-    expect(find.text('Taxi'), findsNothing);
-    expect(find.text('Flights'), findsOneWidget);
-    expect(saveEnabled(tester), isFalse);
+    await tester.tap(find.text('Food & Drinks'));
+    await settleDb(tester);
+    await tester.tap(find.text('Coffee'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.textContaining('Save'));
+    await settleDb(tester);
+
+    final saved = (await tester.runAsync(
+      () => db.expensesDao.watchDetails().first,
+    ))!;
+    final expense = saved.single.expense;
+    expect(expense.note, 'Coffee with Ali');
+    final now = DateTime.now();
+    final yesterday = DateTime(now.year, now.month, now.day - 1);
+    expect(
+      DateTime(expense.date.year, expense.date.month, expense.date.day),
+      yesterday,
+    );
 
     await disposeTree(tester);
   });
+
+  testWidgets('category sheet shows a skeleton until loaded', (tester) async {
+    await pumpScreen(tester);
+    await tester.tap(find.text('Choose category'));
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 400)); // sheet slides up
+    expect(find.byType(AppSkeleton), findsWidgets);
+
+    await settleDb(tester);
+    expect(find.byType(AppSkeleton), findsNothing);
+    expect(find.text('Travel'), findsOneWidget);
+
+    await disposeTree(tester);
+  });
+
+  testWidgets('save without an amount stays on the screen', (tester) async {
+    await pumpScreen(tester);
+    await tester.tap(find.text('Enter an amount'));
+    await tester.pumpAndSettle();
+    expect(find.text('New Expense'), findsOneWidget);
+
+    // Backspace on empty and a second decimal point are ignored.
+    await typeAmount(tester, '..');
+    expect(find.text('0.'), findsOneWidget);
+
+    await disposeTree(tester);
+  });
+}
+
+/// Taps keypad keys for each character of [amount].
+Future<void> typeAmount(WidgetTester tester, String amount) async {
+  const names = {'.': 'decimal'};
+  for (final char in amount.split('')) {
+    final name = names[char] ?? 'd$char';
+    await tester.tap(find.byKey(ValueKey('amount-key-$name')));
+    await tester.pump(const Duration(milliseconds: 50));
+  }
+  await tester.pumpAndSettle();
 }
 
 /// Drift runs its queries on real async time, which the widget tester's
@@ -120,32 +181,3 @@ Future<void> disposeTree(WidgetTester tester) async {
   await tester.pumpWidget(const SizedBox());
   await tester.pump(const Duration(seconds: 1));
 }
-
-/// The form's ListView scrollable (text fields have their own inside).
-final _formScrollable = find
-    .descendant(of: find.byType(ListView), matching: find.byType(Scrollable))
-    .first;
-
-/// Scrolls [label] into view (clear of the pinned Save button), then taps it.
-Future<void> tapChip(WidgetTester tester, String label) async {
-  final chip = find.text(label);
-  await tester.scrollUntilVisible(chip, 120, scrollable: _formScrollable);
-  await tester.drag(find.byType(ListView), const Offset(0, -120));
-  await tester.pumpAndSettle();
-  await tester.tap(chip);
-  await tester.pump();
-}
-
-/// Whether the "Save expense" button is tappable.
-bool saveEnabled(WidgetTester tester) =>
-    tester
-        .widget<InkWell>(
-          find
-              .ancestor(
-                of: find.text('Save expense'),
-                matching: find.byType(InkWell),
-              )
-              .first, // nearest InkWell = the button's own
-        )
-        .onTap !=
-    null;

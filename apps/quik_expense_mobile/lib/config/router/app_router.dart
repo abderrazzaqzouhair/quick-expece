@@ -12,6 +12,13 @@ import '../../features/categories/categories_screen.dart';
 import '../../features/history/history_screen.dart';
 import '../../features/home/home_screen.dart';
 import '../../features/profile/profile_screen.dart';
+import '../../features/profile/screens/about_screen.dart';
+import '../../features/profile/screens/edit_profile_screen.dart';
+import '../../features/profile/screens/manage_categories_screen.dart';
+import '../../features/profile/screens/manage_subcategories_screen.dart';
+import '../../features/profile/screens/privacy_screen.dart';
+import '../../features/profile/screens/settings_screen.dart';
+import '../../features/profile/screens/support_screen.dart';
 import '../../features/splash/splash_screen.dart';
 import '../../features/statistics/statistics_screen.dart';
 import '../navigation/main_shell.dart';
@@ -99,7 +106,44 @@ final appRouter = GoRouter(
     GoRoute(
       path: AppRoutes.addExpense,
       parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => const AddExpenseScreen(),
+      // Presented like an iOS modal: slides up from the bottom.
+      pageBuilder: (context, state) => CustomTransitionPage(
+        key: state.pageKey,
+        fullscreenDialog: true,
+        transitionDuration: const Duration(milliseconds: 380),
+        reverseTransitionDuration: const Duration(milliseconds: 260),
+        child: const AddExpenseScreen(),
+        transitionsBuilder: (context, animation, _, child) => SlideTransition(
+          position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
+            CurvedAnimation(
+              parent: animation,
+              curve: Curves.easeOutCubic,
+              reverseCurve: Curves.easeInCubic,
+            ),
+          ),
+          child: child,
+        ),
+      ),
+    ),
+    for (final (path, screen) in [
+      (AppRoutes.profileEdit, const EditProfileScreen()),
+      (AppRoutes.profileCategories, const ManageCategoriesScreen()),
+      (AppRoutes.profileSettings, const SettingsScreen()),
+      (AppRoutes.profileSupport, const SupportScreen()),
+      (AppRoutes.profilePrivacy, const PrivacyScreen()),
+      (AppRoutes.profileAbout, const AboutScreen()),
+    ])
+      GoRoute(
+        path: path,
+        parentNavigatorKey: _rootNavigatorKey,
+        builder: (context, state) => screen,
+      ),
+    GoRoute(
+      path: '/profile/categories/:categoryId',
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (context, state) => ManageSubcategoriesScreen(
+        categoryId: state.pathParameters['categoryId']!,
+      ),
     ),
     ShellRoute(
       navigatorKey: _shellNavigatorKey,

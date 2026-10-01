@@ -54,6 +54,14 @@ class ExpensesDao extends DatabaseAccessor<AppDatabase>
 
   Future<void> restore(String id) => _setDeletedAt(id, null);
 
+  /// Soft-deletes every expense. Returns how many were deleted.
+  Future<int> softDeleteAll() {
+    final now = DateTime.now();
+    return (update(expenses)..where((e) => e.deletedAt.isNull())).write(
+      ExpensesCompanion(deletedAt: Value(now), updatedAt: Value(now)),
+    );
+  }
+
   Future<void> _setDeletedAt(String id, DateTime? deletedAt) =>
       (update(expenses)..where((e) => e.id.equals(id))).write(
         ExpensesCompanion(
@@ -65,11 +73,13 @@ class ExpensesDao extends DatabaseAccessor<AppDatabase>
   // ----------------------------------------------------------------- reads
 
   /// Non-deleted expenses with their subcategory and category, newest first.
+  /// [limit] caps the count (e.g. a "recent expenses" list).
   Stream<List<ExpenseDetails>> watchDetails({
     DateTime? from,
     DateTime? to,
     String? categoryId,
     String? subcategoryId,
+    int? limit,
   }) {
     final query =
         select(expenses).join([
@@ -92,6 +102,7 @@ class ExpensesDao extends DatabaseAccessor<AppDatabase>
             OrderingTerm.desc(expenses.date),
             OrderingTerm.desc(expenses.createdAt),
           ]);
+    if (limit != null) query.limit(limit);
 
     return query.watch().map(
       (rows) => [
@@ -107,6 +118,24 @@ class ExpensesDao extends DatabaseAccessor<AppDatabase>
 
   Future<ExpenseRow?> findById(String id) =>
       (select(expenses)..where((e) => e.id.equals(id))).getSingleOrNull();
+
+  /// Count, total and first date of all non-deleted expenses.
+  Stream<ExpenseSummary> watchSummary() {
+    final count = expenses.id.count();
+    final total = expenses.amountCents.sum();
+    final first = expenses.date.min();
+    final query = selectOnly(expenses)
+      ..addColumns([count, total, first])
+      ..where(expenses.deletedAt.isNull());
+    return query.watchSingle().map(
+      (row) => ExpenseSummary(
+        count: row.read(count) ?? 0,
+        totalCents: row.read(total) ?? 0,
+        // Aggregates come back as UTC — same instant, shown in local time.
+        firstDate: row.read(first)?.toLocal(),
+      ),
+    );
+  }
 
   /// Total spent (in cents) over the period.
   Stream<int> watchTotal({DateTime? from, DateTime? to}) {

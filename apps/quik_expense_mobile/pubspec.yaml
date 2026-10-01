@@ -45,6 +45,7 @@ dependencies:
     path: ../../packages/features/categories
   profile:
     path: ../../packages/features/profile
+  url_launcher: ^6.3.2
 
 dev_dependencies:
   flutter_test:

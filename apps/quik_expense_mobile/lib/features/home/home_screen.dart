@@ -1,150 +1,101 @@
 import 'dart:math' as math;
 
+import 'package:database/database.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/physics.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import 'package:ui_kit/ui_kit.dart';
 
+import '../../config/providers/database_providers.dart';
 import '../../config/router/app_routes.dart';
+import '../../shared/category_visuals.dart';
+import '../../shared/formatters.dart';
+import '../../shared/spending.dart';
+import '../../shared/widgets/app_toast.dart';
+import '../history/history_controller.dart';
+import '../history/widgets/expense_detail_sheet.dart';
+import 'logic/home_view.dart';
+import 'widgets/home_skeleton.dart';
+import '../../shared/haptics.dart';
 
-/// UI-only dashboard — every number below is mock data (no `expenses`/
-/// `categories` provider wiring yet). Category names/colors are pulled from
-/// the real `CategorySeeder` catalogue so the mock at least matches what
-/// the backend actually seeds, rather than made-up categories.
+/// Dashboard, live from the local database: a month calendar (dots mark
+/// days with spending; selecting a day drives the summary cards), the
+/// selected month's top categories with a trend vs last month, an exploded
+/// pie of where the money went, and the latest expenses.
 ///
-/// There's no Income/Salary/Budget model in the backend (only Expense,
-/// Category, Subcategory) — so unlike some reference finance-app designs,
-/// this doesn't fabricate a "Total Salary" or a per-category budget target.
-/// The two summary cards show the selected calendar day's spend (defaulting
-/// to "Today", with an explicit "No expenses" state when nothing falls on
-/// that day) next to that day's month total, and "Top Categories" ranks
-/// real category totals instead of a made-up budget-vs-spend figure.
-class HomeScreen extends StatefulWidget {
+/// There's no income/budget model, so nothing here fabricates a salary or
+/// a budget target — every figure is a real sum of recorded expenses.
+class HomeScreen extends ConsumerStatefulWidget {
   const HomeScreen({super.key});
 
   @override
-  State<HomeScreen> createState() => _HomeScreenState();
+  ConsumerState<HomeScreen> createState() => _HomeScreenState();
 }
 
-class _HomeScreenState extends State<HomeScreen> {
-  static final _categorySpend = [
-    _CategorySpend(
-      name: 'Food & Drinks',
-      color: HexColor.fromHex('#F59E0B'),
-      iconAsset: AppAssets.iconCategoryFood,
-      amount: 450.00,
-      monthlyDeltaPercent: 12,
-    ),
-    _CategorySpend(
-      name: 'Transport',
-      color: HexColor.fromHex('#3B82F6'),
-      iconAsset: AppAssets.iconCategoryTransport,
-      amount: 275.50,
-      monthlyDeltaPercent: -8,
-    ),
-    _CategorySpend(
-      name: 'Entertainment & Fun',
-      color: HexColor.fromHex('#8B5CF6'),
-      iconAsset: AppAssets.iconCategoryEntertainment,
-      amount: 190.00,
-      monthlyDeltaPercent: 22,
-    ),
-    _CategorySpend(
-      name: 'Subscriptions & Digital',
-      color: HexColor.fromHex('#6366F1'),
-      iconAsset: AppAssets.iconCategorySubscriptions,
-      amount: 132.75,
-      monthlyDeltaPercent: -5,
-    ),
-  ];
-
-  static final _today = DateTime.now();
-  static final _recentExpenses = [
-    _Transaction(
-      category: _categorySpend[0],
-      subcategory: 'Groceries',
-      date: DateTime(_today.year, _today.month, _today.day, 9, 20),
-      amount: 86.40,
-    ),
-    _Transaction(
-      category: _categorySpend[1],
-      subcategory: 'Ride-hailing',
-      date: DateTime(_today.year, _today.month, _today.day, 14, 5),
-      amount: 32.00,
-    ),
-    _Transaction(
-      category: _categorySpend[2],
-      subcategory: 'Streaming',
-      date: DateTime(_today.year, _today.month, _today.day - 1, 20, 30),
-      amount: 59.00,
-    ),
-    _Transaction(
-      category: _categorySpend[3],
-      subcategory: 'Music',
-      date: DateTime(_today.year, _today.month, _today.day - 2, 11, 15),
-      amount: 49.99,
-    ),
-  ];
-
+class _HomeScreenState extends ConsumerState<HomeScreen> {
   // In months, relative to the current one.
   int _monthOffset = 0;
-  late DateTime _selectedDate = DateTime.now();
+  DateTime _selectedDate = dateOnly(DateTime.now());
 
-  double get _totalSpend => _categorySpend.fold(0, (sum, c) => sum + c.amount);
-
-  bool _isSameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
-
-  bool _isSameMonth(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month;
-
-  /// The selected day's total, or `null` when no mock transaction falls on
-  /// that day — the summary card shows an explicit "no expenses" state for
-  /// that case rather than a misleading 0.00.
-  double? get _selectedDaySpend {
-    final matches = _recentExpenses.where(
-      (t) => _isSameDay(t.date, _selectedDate),
-    );
-    if (matches.isEmpty) return null;
-    return matches.fold<double>(0.0, (sum, t) => sum + t.amount);
-  }
-
-  /// The total for the month the *selected day* falls in — not necessarily
-  /// the month currently visible in the calendar grid, since tapping a
-  /// dimmed padding day (from the previous/next month) should still switch
-  /// the "This Month" card to reflect that day's month. There's no
-  /// per-month mock breakdown, only the real current month's, so any other
-  /// month renders the same "no expenses" empty state as an empty day.
-  double? get _selectedMonthSpend {
-    if (!_isSameMonth(_selectedDate, DateTime.now())) return null;
-    return _totalSpend;
-  }
+  /// Last loaded view — kept while another month loads so the dashboard
+  /// doesn't flash back to the skeleton.
+  HomeView? _lastView;
 
   DateTime get _visibleMonth {
     final now = DateTime.now();
     return DateTime(now.year, now.month + _monthOffset);
   }
 
-  /// The full month as a Monday-Sunday grid — padded with the tail end of
-  /// the previous month and the start of the next so every row is a
-  /// complete week, same as a standard calendar view.
-  List<DateTime> get _visibleDays {
-    final month = _visibleMonth;
-    final firstOfMonth = DateTime(month.year, month.month, 1);
-    final lastOfMonth = DateTime(month.year, month.month + 1, 0);
-    final gridStart = firstOfMonth.subtract(
-      Duration(days: firstOfMonth.weekday - 1),
-    );
-    final totalDays = lastOfMonth.difference(gridStart).inDays + 1;
-    final totalCells = (totalDays / 7).ceil() * 7;
-    return List.generate(totalCells, (i) => gridStart.add(Duration(days: i)));
+  void _openCategory(CategorySpend spend) {
+    Haptics.selection();
+    ref
+        .read(historyControllerProvider.notifier)
+        .showCategory(_selectedDate, spend.category.id);
+    context.go(AppRoutes.history);
+  }
+
+  Future<void> _openExpense(ExpenseDetails details) async {
+    final delete = await showExpenseDetailSheet(context, details);
+    if (delete != true || !mounted) return;
+    Haptics.medium();
+    final messenger = ScaffoldMessenger.of(context);
+    final dao = ref.read(appDatabaseProvider).expensesDao;
+    await dao.softDelete(details.expense.id);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        appToast(
+          '${details.subcategory.name} · '
+          '${formatMad(details.expense.amountCents)} deleted',
+          actionLabel: 'Undo',
+          onAction: () => dao.restore(details.expense.id),
+        ),
+      );
   }
 
   @override
   Widget build(BuildContext context) {
-    final days = _visibleDays;
+    final month = _visibleMonth;
+    final days = calendarGrid(month);
+
+    final data = ref.watch(
+      expensesInRangeProvider(homeDataRange(_selectedDate)),
+    );
+    if (data.hasValue) _lastView = buildHomeView(data.value!, _selectedDate);
+    final view = _lastView;
+
+    final gridExpenses = ref
+        .watch(
+          expensesInRangeProvider((
+            from: days.first,
+            to: DateTime(days.last.year, days.last.month, days.last.day + 1),
+          )),
+        )
+        .value;
+    final recent = ref.watch(recentExpensesProvider);
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -153,46 +104,68 @@ class _HomeScreenState extends State<HomeScreen> {
         onProfileTap: () => context.go(AppRoutes.profile),
       ),
       body: SingleChildScrollView(
-        padding: const EdgeInsets.fromLTRB(14, 20, 14, 32),
+        padding: const EdgeInsets.fromLTRB(14, 20, 14, 120),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
             _WeekCalendarStrip(
-              month: _visibleMonth,
+              month: month,
               days: days,
               selectedDate: _selectedDate,
+              daysWithSpend: gridExpenses == null
+                  ? const {}
+                  : daysWithSpend(gridExpenses),
               onPreviousPeriod: () => setState(() => _monthOffset--),
               onNextPeriod: () => setState(() => _monthOffset++),
-              onDaySelected: (date) => setState(() => _selectedDate = date),
+              onDaySelected: (date) =>
+                  setState(() => _selectedDate = dateOnly(date)),
             ),
             const SizedBox(height: 20),
-            _SummaryCards(
-              selectedDate: _selectedDate,
-              selectedDaySpend: _selectedDaySpend,
-              selectedMonthSpend: _selectedMonthSpend,
-            ),
-            const SizedBox(height: 20),
-            _PremiumCard(
-              child: _TopCategoriesCard(
-                categories: _categorySpend,
-                total: _totalSpend,
-                onSeeAll: () => context.push(AppRoutes.categories),
-              ),
-            ),
-            const SizedBox(height: 24),
-            _SectionCard(
-              child: _AnalyticsSection(
-                categories: _categorySpend,
-                total: _totalSpend,
-                onSeeAll: () => context.go(AppRoutes.statistics),
-              ),
-            ),
-            const SizedBox(height: 24),
-            _SectionCard(
-              child: _RecentExpensesSection(
-                expenses: _recentExpenses,
-                onSeeAll: () => context.go(AppRoutes.history),
-              ),
+            SkeletonSwitcher(
+              isLoading: view == null || !recent.hasValue,
+              skeleton: const HomeSkeleton(),
+              child: view == null
+                  ? const SizedBox.shrink()
+                  : AnimatedOpacity(
+                      opacity: data.isLoading ? 0.6 : 1,
+                      duration: const Duration(milliseconds: 200),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          _SummaryCards(
+                            selectedDate: _selectedDate,
+                            selectedDaySpend: view.dayTotalCents,
+                            selectedMonthSpend: view.monthTotalCents,
+                          ),
+                          const SizedBox(height: 20),
+                          _PremiumCard(
+                            child: _TopCategoriesCard(
+                              categories: view.categories,
+                              total: view.monthTotalCents ?? 0,
+                              onSeeAll: () => context.go(AppRoutes.statistics),
+                              onCategoryTap: _openCategory,
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          _SectionCard(
+                            child: _AnalyticsSection(
+                              categories: view.categories,
+                              total: view.monthTotalCents ?? 0,
+                              onSeeAll: () => context.go(AppRoutes.statistics),
+                            ),
+                          ),
+                          const SizedBox(height: 24),
+                          _SectionCard(
+                            child: _RecentExpensesSection(
+                              expenses: recent.value ?? const [],
+                              onSeeAll: () => context.go(AppRoutes.history),
+                              onAdd: () => context.push(AppRoutes.addExpense),
+                              onTap: _openExpense,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
             ),
           ],
         ),
@@ -201,69 +174,28 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 }
 
-class _CategorySpend {
-  const _CategorySpend({
-    required this.name,
-    required this.color,
-    required this.iconAsset,
-    required this.amount,
-    required this.monthlyDeltaPercent,
-  });
-
-  final String name;
-  final Color color;
-  final String iconAsset;
-  final double amount;
-
-  /// Change vs last month, as a signed percentage. Mock/placeholder like
-  /// the rest of this screen — the backend has no per-category historical
-  /// aggregate to derive a real trend from yet; when one exists this is the
-  /// field to wire it to.
-  final int monthlyDeltaPercent;
-}
-
-class _Transaction {
-  const _Transaction({
-    required this.category,
-    required this.subcategory,
-    required this.date,
-    required this.amount,
-  });
-
-  final _CategorySpend category;
-  final String subcategory;
-  final DateTime date;
-  final double amount;
-}
-
-String _formatMad(double amount) =>
-    '${NumberFormat('#,##0.00', 'en_US').format(amount)} MAD';
+Color _colorOf(CategoryRow category) =>
+    CategoryVisuals.colorFor(category.color);
 
 /// "Today" / "Yesterday" for the two most recent days, otherwise a plain
 /// formatted date — same convention used across the recent-expenses list.
 String _relativeDateLabel(DateTime date) {
-  final now = DateTime.now();
-  final today = DateTime(now.year, now.month, now.day);
-  final target = DateTime(date.year, date.month, date.day);
-  final diff = today.difference(target).inDays;
-  if (diff == 0) return 'Today';
-  if (diff == 1) return 'Yesterday';
-  return DateFormat.MMMd('en_US').format(date);
+  final label = formatDayLabel(date);
+  return label == 'Today' || label == 'Yesterday'
+      ? label
+      : DateFormat.MMMd('en_US').format(date);
 }
 
 /// Calendar strip — every day of [month] as a real computed Monday-Sunday
-/// grid (4-6 rows depending on the month), not a hardcoded fake date or a
-/// fixed-length window. Padding days that spill into the previous/next
-/// month are shown dimmed, same as a standard calendar view. Selecting a
-/// day drives the left [_SummaryCard]'s day total (see
-/// `_HomeScreenState._selectedDaySpend`); the recent-expenses/analytics
-/// sections below are still unfiltered mock data (no `expenses` provider
-/// wired yet).
+/// grid (4-6 rows depending on the month). Padding days that spill into the
+/// previous/next month are dimmed. Days with spending get a small dot;
+/// selecting a day drives the summary cards.
 class _WeekCalendarStrip extends StatelessWidget {
   const _WeekCalendarStrip({
     required this.month,
     required this.days,
     required this.selectedDate,
+    required this.daysWithSpend,
     required this.onPreviousPeriod,
     required this.onNextPeriod,
     required this.onDaySelected,
@@ -272,12 +204,10 @@ class _WeekCalendarStrip extends StatelessWidget {
   final DateTime month;
   final List<DateTime> days;
   final DateTime selectedDate;
+  final Set<DateTime> daysWithSpend;
   final VoidCallback onPreviousPeriod;
   final VoidCallback onNextPeriod;
   final ValueChanged<DateTime> onDaySelected;
-
-  bool _isSameDay(DateTime a, DateTime b) =>
-      a.year == b.year && a.month == b.month && a.day == b.day;
 
   @override
   Widget build(BuildContext context) {
@@ -294,6 +224,7 @@ class _WeekCalendarStrip extends StatelessWidget {
           children: [
             IconButton(
               onPressed: onPreviousPeriod,
+              tooltip: 'Previous month',
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.chevron_left, color: AppColors.primary),
             ),
@@ -307,6 +238,7 @@ class _WeekCalendarStrip extends StatelessWidget {
             ),
             IconButton(
               onPressed: onNextPeriod,
+              tooltip: 'Next month',
               visualDensity: VisualDensity.compact,
               icon: const Icon(Icons.chevron_right, color: AppColors.primary),
             ),
@@ -339,8 +271,9 @@ class _WeekCalendarStrip extends StatelessWidget {
               for (final day in row)
                 _DayCell(
                   date: day,
-                  isSelected: _isSameDay(day, selectedDate),
+                  isSelected: day == selectedDate,
                   isInVisibleMonth: day.month == month.month,
+                  hasSpend: daysWithSpend.contains(day),
                   onTap: () => onDaySelected(day),
                 ),
             ],
@@ -355,12 +288,14 @@ class _DayCell extends StatelessWidget {
     required this.date,
     required this.isSelected,
     required this.isInVisibleMonth,
+    required this.hasSpend,
     required this.onTap,
   });
 
   final DateTime date;
   final bool isSelected;
   final bool isInVisibleMonth;
+  final bool hasSpend;
   final VoidCallback onTap;
 
   @override
@@ -370,49 +305,61 @@ class _DayCell extends StatelessWidget {
     // month", same as a standard calendar grid.
     final mutedOpacity = isInVisibleMonth ? 1.0 : 0.35;
 
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(16),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 2),
-        child: Opacity(
-          opacity: mutedOpacity,
-          child: Column(
-            children: [
-              AnimatedContainer(
-                duration: const Duration(milliseconds: 200),
-                curve: Curves.easeOut,
-                width: 36,
-                height: 32,
-                alignment: Alignment.center,
-                decoration: BoxDecoration(
-                  color: isSelected ? AppColors.primary : Colors.transparent,
-                  borderRadius: BorderRadius.circular(14),
-                ),
-                child: Text(
-                  '${date.day}',
-                  style: TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: isSelected
-                        ? AppColors.onPrimary
-                        : AppColors.textPrimary,
+    return Semantics(
+      button: true,
+      selected: isSelected,
+      label:
+          '${DateFormat.yMMMMd('en_US').format(date)}'
+          '${hasSpend ? ', has expenses' : ''}',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 2),
+          child: Opacity(
+            opacity: mutedOpacity,
+            child: Column(
+              children: [
+                AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  curve: Curves.easeOut,
+                  width: 36,
+                  height: 32,
+                  alignment: Alignment.center,
+                  decoration: BoxDecoration(
+                    color: isSelected ? AppColors.primary : Colors.transparent,
+                    borderRadius: BorderRadius.circular(14),
+                  ),
+                  child: Text(
+                    '${date.day}',
+                    style: TextStyle(
+                      fontSize: 14,
+                      fontWeight: FontWeight.w700,
+                      color: isSelected
+                          ? AppColors.onPrimary
+                          : AppColors.textPrimary,
+                    ),
                   ),
                 ),
-              ),
-              const SizedBox(height: 2),
-              if (isSelected)
-                Container(
-                  width: 4,
-                  height: 4,
-                  decoration: const BoxDecoration(
-                    color: AppColors.primary,
-                    shape: BoxShape.circle,
+                const SizedBox(height: 2),
+                // Activity dot: days with at least one expense.
+                AnimatedOpacity(
+                  opacity: hasSpend ? 1 : 0,
+                  duration: const Duration(milliseconds: 200),
+                  child: Container(
+                    width: 4,
+                    height: 4,
+                    decoration: BoxDecoration(
+                      color: isSelected
+                          ? AppColors.primary
+                          : AppColors.primary.withValues(alpha: 0.55),
+                      shape: BoxShape.circle,
+                    ),
                   ),
-                )
-              else
-                const SizedBox(height: 4),
-            ],
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -421,12 +368,9 @@ class _DayCell extends StatelessWidget {
 }
 
 /// Selected-day / selected-month cards. Orange for the day figure, a
-/// derived charcoal tone for the month figure — a deliberate second neutral
-/// tone instead of introducing an off-brand purple just to match a
-/// reference image. Both labels and both amounts track [selectedDate] —
-/// picking a day from an adjacent month (shown dimmed in the calendar grid)
-/// switches the right card to that month too, not just the one currently
-/// scrolled into view.
+/// derived charcoal tone for the month figure. Both labels and both amounts
+/// track [selectedDate] — picking a day from an adjacent month (shown
+/// dimmed in the calendar grid) switches the right card to that month too.
 class _SummaryCards extends StatelessWidget {
   const _SummaryCards({
     required this.selectedDate,
@@ -435,15 +379,10 @@ class _SummaryCards extends StatelessWidget {
   });
 
   final DateTime selectedDate;
-  final double? selectedDaySpend;
-  final double? selectedMonthSpend;
+  final int? selectedDaySpend;
+  final int? selectedMonthSpend;
 
-  bool _isToday(DateTime date) {
-    final now = DateTime.now();
-    return date.year == now.year &&
-        date.month == now.month &&
-        date.day == now.day;
-  }
+  bool _isToday(DateTime date) => date == dateOnly(DateTime.now());
 
   bool _isCurrentMonth(DateTime date) {
     final now = DateTime.now();
@@ -464,7 +403,7 @@ class _SummaryCards extends StatelessWidget {
         Expanded(
           child: _SummaryCard(
             label: dayLabel,
-            amount: selectedDaySpend,
+            amountCents: selectedDaySpend,
             gradientColors: [AppColors.primaryLight, AppColors.primary],
           ),
         ),
@@ -472,7 +411,7 @@ class _SummaryCards extends StatelessWidget {
         Expanded(
           child: _SummaryCard(
             label: monthLabel,
-            amount: selectedMonthSpend,
+            amountCents: selectedMonthSpend,
             gradientColors: [
               Color.lerp(AppColors.textPrimary, Colors.white, 0.18)!,
               AppColors.textPrimary,
@@ -487,18 +426,18 @@ class _SummaryCards extends StatelessWidget {
 class _SummaryCard extends StatelessWidget {
   const _SummaryCard({
     required this.label,
-    required this.amount,
+    required this.amountCents,
     required this.gradientColors,
   });
 
   final String label;
-  // `null` renders a "no expenses" placeholder instead of an amount — the
-  // selected-day card can legitimately have nothing to show.
-  final double? amount;
+  // `null` renders a "no expenses" placeholder instead of an amount.
+  final int? amountCents;
   final List<Color> gradientColors;
 
   @override
   Widget build(BuildContext context) {
+    final amount = amountCents;
     return Container(
       padding: const EdgeInsets.all(18),
       decoration: BoxDecoration(
@@ -531,13 +470,18 @@ class _SummaryCard extends StatelessWidget {
           FittedBox(
             fit: BoxFit.scaleDown,
             alignment: Alignment.centerLeft,
-            child: Text(
-              amount == null ? 'No expenses' : _formatMad(amount!),
-              style: TextStyle(
-                fontSize: amount == null ? 15 : 19,
-                fontWeight: FontWeight.w800,
-                color: Colors.white.withValues(
-                  alpha: amount == null ? 0.75 : 1,
+            child: AnimatedSwitcher(
+              duration: const Duration(milliseconds: 200),
+              child: Text(
+                amount == null ? 'No expenses' : formatMad(amount),
+                key: ValueKey(amount),
+                style: TextStyle(
+                  fontSize: amount == null ? 15 : 19,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white.withValues(
+                    alpha: amount == null ? 0.75 : 1,
+                  ),
+                  fontFeatures: const [FontFeature.tabularFigures()],
                 ),
               ),
             ),
@@ -548,72 +492,60 @@ class _SummaryCard extends StatelessWidget {
   }
 }
 
-/// "Top Categories" — a horizontally scrolling row of category cards
-/// (every category, not just a fixed top-3) instead of a static 3-column
-/// row. Each [_PremiumCategoryCard] is a simple flat tile: solid pastel
-/// wash of the category's real color, name, big price, and a one-line
-/// percent readout underneath (share of spend for the top category, trend
-/// vs last month otherwise) — see [_CategoryCardSurface]. Wrapped in a
-/// bespoke floating [_PremiumCard] (28px radius/24px padding/large soft
-/// shadow, separate from the shared [_SectionCard] used elsewhere) with its
-/// own header type scale ([_PremiumSectionHeader]) and a spring press
-/// animation on each card.
+/// "Top Categories" — a horizontally scrolling row of the selected month's
+/// category cards, biggest first. Tapping a card opens History filtered to
+/// that category.
 class _TopCategoriesCard extends StatelessWidget {
   const _TopCategoriesCard({
     required this.categories,
     required this.total,
     required this.onSeeAll,
+    required this.onCategoryTap,
   });
 
-  final List<_CategorySpend> categories;
-  final double total;
+  final List<CategorySpend> categories;
+  final int total;
   final VoidCallback onSeeAll;
+  final ValueChanged<CategorySpend> onCategoryTap;
 
   @override
   Widget build(BuildContext context) {
-    final ranked = [...categories]
-      ..sort((a, b) => b.amount.compareTo(a.amount));
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _PremiumSectionHeader(title: 'Top Categories', onSeeAll: onSeeAll),
         const SizedBox(height: 24),
-        if (ranked.isEmpty)
+        if (categories.isEmpty)
           const Text(
-            'No expenses yet — your top categories will show up here.',
+            'No expenses this month — your top categories will show up here.',
             style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
           )
         else
           // A little taller than the card itself and unclipped, so each
-          // card's own drop shadow has room to render — _PremiumCard's
-          // own clip is the final guard against it bleeding past the
-          // floating card's rounded corners.
+          // card's own drop shadow has room to render.
           SizedBox(
-            height: 140,
+            height: _categoryCardHeight(context) + 12,
             child: ListView.separated(
               scrollDirection: Axis.horizontal,
               physics: const BouncingScrollPhysics(),
               clipBehavior: Clip.none,
-              itemCount: ranked.length,
+              itemCount: categories.length,
               separatorBuilder: (context, _) => const SizedBox(width: 14),
               itemBuilder: (context, i) => _PremiumCategoryCard(
-                category: ranked[i],
+                spend: categories[i],
                 isLargest: i == 0,
-                shareOfTotal: total == 0 ? 0 : ranked[i].amount / total,
+                shareOfTotal: total == 0 ? 0 : categories[i].totalCents / total,
+                onTap: () => onCategoryTap(categories[i]),
               ),
             ),
           ),
-        // Extra breathing room at the bottom so the section has a bit more
-        // height without enlarging the tiles themselves.
         const SizedBox(height: 12),
       ],
     );
   }
 }
 
-/// Title (20px SemiBold near-black) and a "See all" action (muted accent
-/// orange, 14px Medium, chevron, small tap animation) sharing a row.
+/// Title (20px SemiBold near-black) and a "See all" action sharing a row.
 class _PremiumSectionHeader extends StatelessWidget {
   const _PremiumSectionHeader({required this.title, required this.onSeeAll});
 
@@ -626,14 +558,20 @@ class _PremiumSectionHeader extends StatelessWidget {
       crossAxisAlignment: CrossAxisAlignment.center,
       mainAxisAlignment: MainAxisAlignment.spaceBetween,
       children: [
-        Text(
-          title,
-          style: const TextStyle(
-            fontSize: 20,
-            fontWeight: FontWeight.w600,
-            color: AppColors.textPrimary,
+        // Yields to "See all" with large system text instead of overflowing.
+        Expanded(
+          child: Text(
+            title,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              fontSize: 20,
+              fontWeight: FontWeight.w600,
+              color: AppColors.textPrimary,
+            ),
           ),
         ),
+        const SizedBox(width: 8),
         _ViewAllButton(onTap: onSeeAll),
       ],
     );
@@ -659,51 +597,61 @@ class _ViewAllButtonState extends State<_ViewAllButton> {
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _setPressed(true),
-      onTapUp: (_) => _setPressed(false),
-      onTapCancel: () => _setPressed(false),
-      onTap: widget.onTap,
-      child: AnimatedScale(
-        scale: _pressed ? 0.94 : 1,
-        duration: const Duration(milliseconds: 120),
-        curve: Curves.easeOut,
-        child: Row(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            Text(
-              'See all',
-              style: TextStyle(
-                fontSize: 14,
-                fontWeight: FontWeight.w500,
-                color: AppColors.primary.withValues(alpha: 0.7),
-              ),
+    return Semantics(
+      button: true,
+      label: 'See all',
+      excludeSemantics: true,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTapDown: (_) => _setPressed(true),
+        onTapUp: (_) => _setPressed(false),
+        onTapCancel: () => _setPressed(false),
+        onTap: widget.onTap,
+        child: Padding(
+          // Comfortable tap target around the small label.
+          padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 4),
+          child: AnimatedScale(
+            scale: _pressed ? 0.94 : 1,
+            duration: const Duration(milliseconds: 120),
+            curve: Curves.easeOut,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'See all',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w500,
+                    color: AppColors.primary.withValues(alpha: 0.7),
+                  ),
+                ),
+                Icon(
+                  Icons.chevron_right_rounded,
+                  size: 18,
+                  color: AppColors.primary.withValues(alpha: 0.7),
+                ),
+              ],
             ),
-            Icon(
-              Icons.chevron_right_rounded,
-              size: 18,
-              color: AppColors.primary.withValues(alpha: 0.7),
-            ),
-          ],
+          ),
         ),
       ),
     );
   }
 }
 
-/// A single category card with a physics-based spring press animation:
-/// scales to 98%, deepens its shadow, and slightly strengthens its gradient
-/// while pressed, then springs back on release.
+/// A single category card with a physics-based spring press animation.
 class _PremiumCategoryCard extends StatefulWidget {
   const _PremiumCategoryCard({
-    required this.category,
+    required this.spend,
     required this.isLargest,
     required this.shareOfTotal,
+    required this.onTap,
   });
 
-  final _CategorySpend category;
+  final CategorySpend spend;
   final bool isLargest;
   final double shareOfTotal;
+  final VoidCallback onTap;
 
   @override
   State<_PremiumCategoryCard> createState() => _PremiumCategoryCardState();
@@ -728,9 +676,7 @@ class _PremiumCategoryCardState extends State<_PremiumCategoryCard>
     super.dispose();
   }
 
-  // controller.value doubles as "press amount" (0 = rest, 1 = fully
-  // pressed) rather than a literal scale — the spring targets 0 or 1 and
-  // _CategoryCardSurface/the Transform.scale below interpolate from that.
+  // controller.value doubles as "press amount" (0 = rest, 1 = pressed).
   void _animateTo(double target) {
     final simulation = SpringSimulation(
       const SpringDescription(mass: 1, stiffness: 300, damping: 22),
@@ -743,24 +689,33 @@ class _PremiumCategoryCardState extends State<_PremiumCategoryCard>
 
   @override
   Widget build(BuildContext context) {
-    return GestureDetector(
-      onTapDown: (_) => _animateTo(1),
-      onTapUp: (_) => _animateTo(0),
-      onTapCancel: () => _animateTo(0),
-      child: AnimatedBuilder(
-        animation: _controller,
-        builder: (context, child) {
-          final pressT = _controller.value.clamp(0.0, 1.0);
-          return Transform.scale(
-            scale: 1 - (0.02 * pressT),
-            child: _CategoryCardSurface(
-              category: widget.category,
-              isLargest: widget.isLargest,
-              shareOfTotal: widget.shareOfTotal,
-              pressT: pressT,
-            ),
-          );
-        },
+    final spend = widget.spend;
+    return Semantics(
+      button: true,
+      label:
+          '${spend.category.name}, ${formatMad(spend.totalCents)}. '
+          'Show in history',
+      excludeSemantics: true,
+      child: GestureDetector(
+        onTapDown: (_) => _animateTo(1),
+        onTapUp: (_) => _animateTo(0),
+        onTapCancel: () => _animateTo(0),
+        onTap: widget.onTap,
+        child: AnimatedBuilder(
+          animation: _controller,
+          builder: (context, child) {
+            final pressT = _controller.value.clamp(0.0, 1.0);
+            return Transform.scale(
+              scale: 1 - (0.02 * pressT),
+              child: _CategoryCardSurface(
+                spend: spend,
+                isLargest: widget.isLargest,
+                shareOfTotal: widget.shareOfTotal,
+                pressT: pressT,
+              ),
+            );
+          },
+        ),
       ),
     );
   }
@@ -768,35 +723,38 @@ class _PremiumCategoryCardState extends State<_PremiumCategoryCard>
 
 double _lerp(double a, double b, double t) => a + (b - a) * t;
 
-/// A plain white card: a tinted icon badge + category name on top, the big
-/// amount, and a colored trend pill underneath. Neutral hairline border
-/// (`#F1F3F5`) + a soft shadow for depth — a saturated colored border reads
-/// as an AI-mockup tell in a finance app, where premium apps (Wallet,
-/// Revolut) keep the card chrome neutral and let the pill be the only spot
-/// of strong color.
+/// 128 at normal text size, growing with the system text scale so the
+/// name, amount and pill never clip.
+double _categoryCardHeight(BuildContext context) =>
+    128 + 30 * (MediaQuery.textScalerOf(context).scale(1) - 1).clamp(0, 2);
+
+/// A plain white card: category icon + name on top, the big amount, and a
+/// colored pill underneath (share of spend for the leader, trend vs last
+/// month for the rest).
 class _CategoryCardSurface extends StatelessWidget {
   const _CategoryCardSurface({
-    required this.category,
+    required this.spend,
     required this.isLargest,
     required this.shareOfTotal,
     required this.pressT,
   });
 
-  final _CategorySpend category;
+  final CategorySpend spend;
   final bool isLargest;
   final double shareOfTotal;
   final double pressT;
 
   // iOS system green/red — spend down vs last month is "good" (green), up is
-  // "watch out" (red). The accent star pill covers the leader instead.
+  // "watch out" (red).
   static const _trendDown = Color(0xFF2FB457);
   static const _trendUp = Color(0xFFE5484D);
 
   @override
   Widget build(BuildContext context) {
+    final category = spend.category;
     return Container(
       width: 176,
-      height: 128,
+      height: _categoryCardHeight(context),
       padding: const EdgeInsets.all(14),
       clipBehavior: Clip.antiAlias,
       decoration: BoxDecoration(
@@ -817,12 +775,10 @@ class _CategoryCardSurface extends StatelessWidget {
           Row(
             crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              AppIconBadge(
-                assetPath: category.iconAsset,
-                color: category.color,
-                backgroundAlpha: 0.12,
+              CategoryAvatar(
+                name: category.name,
+                colorHex: category.color,
                 size: 26,
-                iconSize: 15,
               ),
               const SizedBox(width: 8),
               Expanded(
@@ -844,7 +800,10 @@ class _CategoryCardSurface extends StatelessWidget {
             TextSpan(
               children: [
                 TextSpan(
-                  text: NumberFormat('#,##0', 'en_US').format(category.amount),
+                  text: NumberFormat(
+                    '#,##0',
+                    'en_US',
+                  ).format(spend.totalCents / 100),
                   style: const TextStyle(
                     fontSize: 24,
                     fontWeight: FontWeight.w800,
@@ -876,21 +835,24 @@ class _CategoryCardSurface extends StatelessWidget {
     final IconData icon;
     final Color color;
     final String label;
+    final delta = spend.deltaPercent;
 
     if (isLargest) {
       icon = Icons.star_rounded;
-      color = category.color;
+      color = _colorOf(spend.category);
       label = '${(shareOfTotal * 100).round()}% of spend';
+    } else if (delta == null) {
+      // Nothing spent on it last month — a % change would be meaningless.
+      icon = Icons.auto_awesome_rounded;
+      color = _colorOf(spend.category);
+      label = 'New this month';
     } else {
-      final delta = category.monthlyDeltaPercent;
       final isUp = delta >= 0;
       icon = isUp ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded;
       color = isUp ? _trendUp : _trendDown;
       label = '${delta.abs()}% vs last mo.';
     }
 
-    // Filled pill: light tint of the trend color behind icon + label —
-    // matches the "↘ 8%" / "↗ 8%" chips on the summary cards.
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
       decoration: BoxDecoration(
@@ -921,8 +883,7 @@ class _CategoryCardSurface extends StatelessWidget {
 }
 
 /// A floating white card for premium sections: 28px radius, 24px padding, a
-/// large soft low-opacity shadow — distinct from the flatter, tighter
-/// [_SectionCard] used by the other Home sections.
+/// large soft low-opacity shadow.
 class _PremiumCard extends StatelessWidget {
   const _PremiumCard({required this.child});
 
@@ -978,54 +939,71 @@ class _SectionCard extends StatelessWidget {
   }
 }
 
-/// Shows at most [_maxVisible] of the most recent expenses — "Recent" means
-/// recent, not the whole history; "See All" is the way to the full list.
-/// Each row surfaces exactly what was asked for: icon, category,
-/// subcategory, time, and amount — no free-text merchant note competing for
-/// attention with them.
+/// The latest few expenses (all time). Tap one for details; "See all" goes
+/// to History.
 class _RecentExpensesSection extends StatelessWidget {
   const _RecentExpensesSection({
     required this.expenses,
     required this.onSeeAll,
+    required this.onAdd,
+    required this.onTap,
   });
 
-  static const _maxVisible = 4;
-
-  final List<_Transaction> expenses;
+  final List<ExpenseDetails> expenses;
   final VoidCallback onSeeAll;
+  final VoidCallback onAdd;
+  final ValueChanged<ExpenseDetails> onTap;
 
   @override
   Widget build(BuildContext context) {
-    final visible = expenses.take(_maxVisible).toList();
-
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _PremiumSectionHeader(title: 'Recent Expenses', onSeeAll: onSeeAll),
         const SizedBox(height: 4),
-        if (visible.isEmpty)
-          const Padding(
-            padding: EdgeInsets.symmetric(vertical: 12),
-            child: Text(
-              'No expenses yet.',
-              style: TextStyle(fontSize: 13, color: AppColors.textSecondary),
+        if (expenses.isEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'No expenses yet.',
+                    style: TextStyle(
+                      fontSize: 13,
+                      color: AppColors.textSecondary,
+                    ),
+                  ),
+                ),
+                TextButton.icon(
+                  onPressed: onAdd,
+                  style: TextButton.styleFrom(
+                    foregroundColor: AppColors.primary,
+                  ),
+                  icon: const Icon(Icons.add_rounded, size: 18),
+                  label: const Text(
+                    'Add expense',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                ),
+              ],
             ),
           )
         else
-          for (final transaction in visible)
-            _TransactionRow(transaction: transaction),
+          for (final details in expenses)
+            _TransactionRow(details: details, onTap: () => onTap(details)),
       ],
     );
   }
 }
 
 class _TransactionRow extends StatelessWidget {
-  const _TransactionRow({required this.transaction});
+  const _TransactionRow({required this.details, required this.onTap});
 
-  final _Transaction transaction;
+  final ExpenseDetails details;
+  final VoidCallback onTap;
 
-  /// "9:20 AM" for today's entries; "Yesterday, 8:30 PM" otherwise — the
-  /// bare time alone would be ambiguous once the list spans several days.
+  /// "9:20 AM" for today's entries; "Yesterday, 8:30 PM" otherwise.
   String _timeLabel(DateTime date) {
     final time = DateFormat.jm('en_US').format(date);
     final day = _relativeDateLabel(date);
@@ -1034,91 +1012,102 @@ class _TransactionRow extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          AppIconBadge(
-            assetPath: transaction.category.iconAsset,
-            color: transaction.category.color,
-            backgroundColor: Colors.white,
-            border: Border.all(color: AppColors.border),
-          ),
-          const SizedBox(width: 12),
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text(
-                  transaction.category.name,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 14,
-                    fontWeight: FontWeight.w700,
-                    color: AppColors.textPrimary,
-                  ),
-                ),
-                const SizedBox(height: 3),
-                Text(
-                  transaction.subcategory,
-                  maxLines: 1,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(
-                    fontSize: 12,
-                    color: AppColors.textSecondary,
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(width: 10),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.end,
+    final expense = details.expense;
+    return Semantics(
+      button: true,
+      label:
+          '${details.category.name}, ${details.subcategory.name}, '
+          '${formatMad(expense.amountCents)}, ${_timeLabel(expense.date)}',
+      excludeSemantics: true,
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 12),
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
             children: [
-              Text(
-                '-${_formatMad(transaction.amount)}',
-                style: const TextStyle(
-                  fontSize: 13.5,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
+              CategoryAvatar(
+                name: details.category.name,
+                colorHex: details.category.color,
+                size: 40,
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                flex: 3,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      details.category.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      expense.note ?? details.subcategory.name,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
-              const SizedBox(height: 3),
-              Text(
-                _timeLabel(transaction.date),
-                style: const TextStyle(
-                  fontSize: 11.5,
-                  color: AppColors.textSecondary,
+              const SizedBox(width: 10),
+              Flexible(
+                flex: 2,
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      child: Text(
+                        '-${formatMad(expense.amountCents)}',
+                        style: const TextStyle(
+                          fontSize: 13.5,
+                          fontWeight: FontWeight.w700,
+                          color: AppColors.textPrimary,
+                          fontFeatures: [FontFeature.tabularFigures()],
+                        ),
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    Text(
+                      _timeLabel(expense.date),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 11.5,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
                 ),
               ),
             ],
           ),
-        ],
+        ),
       ),
     );
   }
 }
 
-/// Info list on the left (dot, category name, amount — stacked, one row per
-/// category), a real *exploded* pie on the right — each wedge physically
-/// pulled apart from the others, like the reference image, not just
-/// outlined.
+/// Legend (top 4 categories) beside an *exploded* pie — each wedge pulled
+/// apart from the others.
 ///
-/// fl_chart has no built-in "explode" option (that's a Syncfusion-only
-/// feature among maintained packages — `pie_chart_3d` looked promising but
-/// is unverified/low-adoption and doesn't actually support slice
-/// separation), so this fakes it with a well-known trick: render one full
-/// circular [PieChart] per category with every *other* category's section
-/// made transparent, then [Transform.translate] each of those full circles
-/// outward along its own slice's bisecting angle. Stacked together, only
-/// the real per-slice color and position show through, and the small
-/// per-slice translation creates a genuine gap between wedges instead of
-/// just a border line. The angle math only depends on values this widget
-/// already has (category amounts + `startDegreeOffset: -90`, matching
-/// fl_chart's own clockwise-from-12-o'clock convention), not on any
-/// internal fl_chart pixel geometry, so it's safe to compute directly.
+/// fl_chart has no "explode" option, so this renders one full [PieChart]
+/// per category with every other section transparent, then translates each
+/// outward along its own slice's bisecting angle. The angle math only uses
+/// the amounts + `startDegreeOffset: -90` (fl_chart's clockwise-from-12
+/// convention), not internal fl_chart geometry.
 class _AnalyticsSection extends StatelessWidget {
   const _AnalyticsSection({
     required this.categories,
@@ -1126,8 +1115,8 @@ class _AnalyticsSection extends StatelessWidget {
     required this.onSeeAll,
   });
 
-  final List<_CategorySpend> categories;
-  final double total;
+  final List<CategorySpend> categories;
+  final int total;
   final VoidCallback onSeeAll;
 
   static const _chartSize = 150.0;
@@ -1136,79 +1125,110 @@ class _AnalyticsSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final top4 = categories.take(4).toList();
-    final sum = top4.fold(0.0, (s, c) => s + c.amount);
+    final sum = top4.fold(0, (s, c) => s + c.totalCents);
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
       children: [
         _PremiumSectionHeader(title: 'Analytics', onSeeAll: onSeeAll),
         const SizedBox(height: 20),
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  for (var i = 0; i < top4.length; i++)
-                    Padding(
-                      padding: EdgeInsets.only(
-                        bottom: i == top4.length - 1 ? 0 : 16,
-                      ),
-                      child: _CategoryLegendItem(category: top4[i]),
-                    ),
-                ],
+        if (top4.isEmpty)
+          Row(
+            children: [
+              Container(
+                width: 56,
+                height: 56,
+                decoration: BoxDecoration(
+                  color: AppColors.primary.withValues(alpha: 0.1),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.pie_chart_rounded,
+                  color: AppColors.primary,
+                ),
               ),
-            ),
-            const SizedBox(width: 16),
-            SizedBox(
-              width: _chartSize,
-              height: _chartSize,
-              child: _buildExplodedPie(top4, sum),
-            ),
-          ],
-        ),
+              const SizedBox(width: 14),
+              const Expanded(
+                child: Text(
+                  'Add a few expenses to see where your money goes.',
+                  style: TextStyle(
+                    fontSize: 13,
+                    height: 1.4,
+                    color: AppColors.textSecondary,
+                  ),
+                ),
+              ),
+            ],
+          )
+        else
+          Row(
+            crossAxisAlignment: CrossAxisAlignment.center,
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    for (var i = 0; i < top4.length; i++)
+                      Padding(
+                        padding: EdgeInsets.only(
+                          bottom: i == top4.length - 1 ? 0 : 16,
+                        ),
+                        child: _CategoryLegendItem(spend: top4[i]),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 16),
+              SizedBox(
+                width: _chartSize,
+                height: _chartSize,
+                child: _buildExplodedPie(top4, sum),
+              ),
+            ],
+          ),
       ],
     );
   }
 
-  Widget _buildExplodedPie(List<_CategorySpend> top4, double sum) {
+  Widget _buildExplodedPie(List<CategorySpend> top4, int sum) {
+    // A single slice is a full circle — nothing to explode.
+    final explode = top4.length > 1 ? _explodeDistance : 0.0;
     var cumulativeDegrees = 0.0;
     final slices = <Widget>[];
 
     for (var i = 0; i < top4.length; i++) {
-      final sweep = sum == 0 ? 360.0 / top4.length : top4[i].amount / sum * 360;
+      final sweep = sum == 0
+          ? 360.0 / top4.length
+          : top4[i].totalCents / sum * 360;
       final midAngleRad = (-90 + cumulativeDegrees + sweep / 2) * math.pi / 180;
       cumulativeDegrees += sweep;
 
       slices.add(
         Transform.translate(
           offset: Offset(
-            math.cos(midAngleRad) * _explodeDistance,
-            math.sin(midAngleRad) * _explodeDistance,
+            math.cos(midAngleRad) * explode,
+            math.sin(midAngleRad) * explode,
           ),
-          // No shadow here: this circle is transparent everywhere except
-          // the one visible wedge, so a boxShadow on it shadows the whole
-          // invisible circle bounding box, not the wedge's actual shape —
-          // that's the diffuse colored halo the user was seeing.
           child: PieChart(
             PieChartData(
               sections: [
                 for (var j = 0; j < top4.length; j++)
                   PieChartSectionData(
-                    value: top4[j].amount,
-                    color: i == j ? top4[j].color : Colors.transparent,
+                    value: top4[j].totalCents.toDouble(),
+                    color: i == j
+                        ? _colorOf(top4[j].category)
+                        : Colors.transparent,
                     radius: 72,
                     showTitle: i == j,
                     title: total == 0
                         ? '0%'
-                        : '${(top4[j].amount / total * 100).round()}%',
+                        : '${(top4[j].totalCents / total * 100).round()}%',
                     titleStyle: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w800,
                       color: Colors.white,
                     ),
-                    titlePositionPercentageOffset: 0.62,
+                    titlePositionPercentageOffset: top4.length == 1 ? 0 : 0.62,
                     borderSide: i == j
                         ? const BorderSide(color: Colors.white, width: 2)
                         : BorderSide.none,
@@ -1228,9 +1248,9 @@ class _AnalyticsSection extends StatelessWidget {
 }
 
 class _CategoryLegendItem extends StatelessWidget {
-  const _CategoryLegendItem({required this.category});
+  const _CategoryLegendItem({required this.spend});
 
-  final _CategorySpend category;
+  final CategorySpend spend;
 
   @override
   Widget build(BuildContext context) {
@@ -1243,7 +1263,7 @@ class _CategoryLegendItem extends StatelessWidget {
             width: 8,
             height: 8,
             decoration: BoxDecoration(
-              color: category.color,
+              color: _colorOf(spend.category),
               shape: BoxShape.circle,
             ),
           ),
@@ -1254,7 +1274,7 @@ class _CategoryLegendItem extends StatelessWidget {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
-                category.name,
+                spend.category.name,
                 maxLines: 2,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
@@ -1266,7 +1286,7 @@ class _CategoryLegendItem extends StatelessWidget {
               ),
               const SizedBox(height: 2),
               Text(
-                _formatMad(category.amount),
+                formatMad(spend.totalCents),
                 style: const TextStyle(
                   fontSize: 11.5,
                   color: AppColors.textSecondary,

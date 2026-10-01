@@ -16,4 +16,14 @@ abstract final class AppRoutes {
   // Reachable, but not one of the 5 bottom-nav slots.
   static const categories = '/categories';
   static const addExpense = '/add-expense';
+
+  // Profile sub-screens (pushed full-screen over the tabs).
+  static const profileEdit = '/profile/edit';
+  static const profileCategories = '/profile/categories';
+  static String profileSubcategories(String categoryId) =>
+      '/profile/categories/$categoryId';
+  static const profileSettings = '/profile/settings';
+  static const profileSupport = '/profile/support';
+  static const profilePrivacy = '/profile/privacy';
+  static const profileAbout = '/profile/about';
 }
