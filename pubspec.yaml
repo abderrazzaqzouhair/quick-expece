@@ -1,115 +1,87 @@
-name: quikexpense
-description: "A new Flutter project."
-# The following line prevents the package from being accidentally published to
-# pub.dev using `flutter pub publish`. This is preferred for private packages.
-publish_to: 'none' # Remove this line if you wish to publish to pub.dev
-
-# The following defines the version and build number for your application.
-# A version number is three numbers separated by dots, like 1.2.43
-# followed by an optional build number separated by a +.
-# Both the version and the builder number may be overridden in flutter
-# build by specifying --build-name and --build-number, respectively.
-# In Android, build-name is used as versionName while build-number used as versionCode.
-# Read more about Android versioning at https://developer.android.com/studio/publish/versioning
-# In iOS, build-name is used as CFBundleShortVersionString while build-number is used as CFBundleVersion.
-# Read more about iOS versioning at
-# https://developer.apple.com/library/archive/documentation/General/Reference/InfoPlistKeyReference/Articles/CoreFoundationKeys.html
-# In Windows, build-name is used as the major, minor, and patch parts
-# of the product and file versions while build-number is used as the build suffix.
-version: 1.0.0+1
+name: quik_expense_workspace
+publish_to: 'none'
 
 environment:
   sdk: ^3.9.2
 
-# Dependencies specify other packages that your package needs in order to work.
-# To automatically upgrade your package dependencies to the latest versions
-# consider running `flutter pub upgrade --major-versions`. Alternatively,
-# dependencies can be manually updated by changing the version numbers below to
-# the latest version available on pub.dev. To see which dependencies have newer
-# versions available, run `flutter pub outdated`.
-dependencies:
-  flutter:
-    sdk: flutter
-
-  # The following adds the Cupertino Icons font to your application.
-  # Use with the CupertinoIcons class for iOS style icons.
-  cupertino_icons: ^1.0.8
-
-  # State management / DI
-  flutter_riverpod: ^2.6.1
-
-  # Routing
-  go_router: ^14.8.1
-
-  # Networking
-  dio: ^5.7.0
-
-  # Persistence
-  flutter_secure_storage: ^9.2.2
-  shared_preferences: ^2.3.3
-
-  # UI
-  google_fonts: ^6.2.1
-  flutter_svg: ^2.0.16
-  cached_network_image: ^3.4.1
-  fl_chart: ^0.69.2
-  shimmer: ^3.0.0
-  equatable: ^2.0.7
-
-  # Utilities
-  intl: ^0.19.0
-  connectivity_plus: ^6.1.0
-  uuid: ^4.5.1
+# Root workspace manifest. This package has no source of its own — it exists
+# so Melos/pub can resolve the workspace and so `dart pub get` at the repo
+# root works via pub workspaces.
+workspace:
+  - apps/quik_expense_mobile
+  - packages/core
+  - packages/database
+  - packages/networking
+  - packages/localization
+  - packages/ui_kit
+  - packages/features/auth
+  - packages/features/expenses
+  - packages/features/categories
+  - packages/features/profile
 
 dev_dependencies:
-  flutter_test:
-    sdk: flutter
+  melos: ^7.4.0
 
-  # The "flutter_lints" package below contains a set of recommended lints to
-  # encourage good coding practices. The lint set provided by the package is
-  # activated in the `analysis_options.yaml` file located at the root of your
-  # package. See that file for information about deactivating specific lint
-  # rules and activating additional ones.
-  flutter_lints: ^5.0.0
+melos:
+  name: quik_expense
+  packages:
+    - apps/*
+    - packages/*
+    - packages/features/*
 
-# For information on the generic Dart part of this file, see the
-# following page: https://dart.dev/tools/pub/pubspec
+  command:
+    version:
+      workspaceChangelog: true
+    bootstrap:
+      usePubspecOverrides: true
 
-# The following section is specific to Flutter packages.
-flutter:
+  scripts:
+    analyze:
+      run: dart analyze --fatal-infos
+      exec:
+        concurrency: 5
+      description: Run analyzer on every package.
 
-  # The following line ensures that the Material Icons font is
-  # included with your application, so that you can use the icons in
-  # the material Icons class.
-  uses-material-design: true
+    format:
+      run: dart format --set-exit-if-changed .
+      exec:
+        concurrency: 5
+      description: Check formatting on every package.
 
-  # To add assets to your application, add an assets section, like this:
-  # assets:
-  #   - images/a_dot_burr.jpeg
-  #   - images/a_dot_ham.jpeg
+    format:fix:
+      run: dart format .
+      exec:
+        concurrency: 5
+      description: Fix formatting on every package.
 
-  # An image asset can refer to one or more resolution-specific "variants", see
-  # https://flutter.dev/to/resolution-aware-images
+    test:
+      run: flutter test
+      exec:
+        concurrency: 1
+      packageFilters:
+        dirExists: test
+      description: Run tests for every package that has a test/ directory.
 
-  # For details regarding adding assets from package dependencies, see
-  # https://flutter.dev/to/asset-from-package
+    test:coverage:
+      run: flutter test --coverage
+      exec:
+        concurrency: 1
+      packageFilters:
+        dirExists: test
+      description: Run tests with coverage for every package that has a test/ directory.
 
-  # To add custom fonts to your application, add a fonts section here,
-  # in this "flutter" section. Each entry in this list should have a
-  # "family" key with the font family name, and a "fonts" key with a
-  # list giving the asset and other descriptors for the font. For
-  # example:
-  # fonts:
-  #   - family: Schyler
-  #     fonts:
-  #       - asset: fonts/Schyler-Regular.ttf
-  #       - asset: fonts/Schyler-Italic.ttf
-  #         style: italic
-  #   - family: Trajan Pro
-  #     fonts:
-  #       - asset: fonts/TrajanPro.ttf
-  #       - asset: fonts/TrajanPro_Bold.ttf
-  #         weight: 700
-  #
-  # For details regarding fonts from package dependencies,
-  # see https://flutter.dev/to/font-from-package
+    build:runner:
+      run: dart run build_runner build --delete-conflicting-outputs
+      exec:
+        concurrency: 1
+      packageFilters:
+        dependsOn: build_runner
+      description: Run code generation for every package depending on build_runner.
+
+    build:runner:watch:
+      run: dart run build_runner watch --delete-conflicting-outputs
+      exec:
+        concurrency: 1
+      packageFilters:
+        dependsOn: build_runner
+      description: Watch + run code generation for every package depending on build_runner.

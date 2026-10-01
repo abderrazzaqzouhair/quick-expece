@@ -1,0 +1,14 @@
+name: feature
+description: >-
+  Generates a new quik_expense feature package (packages/features/<name>)
+  with the Clean Architecture skeleton: data / domain / presentation.
+version: 0.1.0
+
+environment:
+  mason: ">=0.1.0-dev <1.0.0"
+
+vars:
+  feature_name:
+    type: string
+    description: Feature name in snake_case, e.g. "expenses" or "auth".
+    prompt: "Feature name (snake_case)?"

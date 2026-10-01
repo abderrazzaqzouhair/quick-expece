@@ -1,0 +1,7 @@
+include: package:flutter_lints/flutter.yaml
+
+analyzer:
+  errors:
+    # False positive: @JsonKey on a Freezed constructor parameter is valid —
+    # Freezed generates the backing field. See freezed/json_serializable docs.
+    invalid_annotation_target: ignore

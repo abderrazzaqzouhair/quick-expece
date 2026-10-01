@@ -1,0 +1,11 @@
+{
+  "@@locale": "en",
+  "appTitle": "QuikExpense",
+  "@appTitle": {
+    "description": "The application title shown on the splash screen and app switcher."
+  },
+  "genericErrorMessage": "Something went wrong. Please try again.",
+  "@genericErrorMessage": {
+    "description": "Fallback error message shown when a request fails without a specific message."
+  }
+}

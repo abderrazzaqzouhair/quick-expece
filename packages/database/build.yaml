@@ -1,0 +1,11 @@
+targets:
+  $default:
+    builders:
+      drift_dev:
+        options:
+          # ISO-8601 text instead of unix ints: readable when inspecting the
+          # .sqlite file, and matches what the Laravel API sends/receives.
+          store_date_time_values_as_text: true
+          # Generate `CategoryRow`, `ExpenseRow`… via @DataClassName, and keep
+          # companions/`toColumns` for inserts and partial updates.
+          data_class_to_companions: true
