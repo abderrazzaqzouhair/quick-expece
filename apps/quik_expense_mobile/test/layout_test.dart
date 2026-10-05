@@ -6,6 +6,8 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:quik_expense_mobile/config/providers/database_providers.dart';
 import 'package:quik_expense_mobile/features/add_expense/add_expense_screen.dart';
+import 'package:quik_expense_mobile/features/categories/categories_screen.dart';
+import 'package:quik_expense_mobile/features/expense_list/expense_list_screen.dart';
 import 'package:quik_expense_mobile/features/history/history_screen.dart';
 import 'package:quik_expense_mobile/config/providers/preferences_providers.dart';
 import 'package:quik_expense_mobile/features/home/home_screen.dart';
@@ -159,6 +161,64 @@ void main() {
         // Scroll through everything so every section lays out.
         await tester.drag(
           find.byType(SingleChildScrollView),
+          const Offset(0, -3000),
+        );
+        await tester.pumpAndSettle();
+
+        await tester.pumpWidget(const SizedBox());
+        await tester.pump(const Duration(seconds: 1));
+        await tester.runAsync(db.close);
+      });
+    }
+
+    for (final (name, screen) in [
+      ('Categories', const CategoriesScreen()),
+      ('Expense List', const ExpenseListScreen()),
+    ]) {
+      testWidgets('$name fits iPhone SE at text scale $textScale', (
+        tester,
+      ) async {
+        final db = AppDatabase(NativeDatabase.memory());
+        await tester.runAsync(() async {
+          final now = DateTime.now();
+          for (final (c, sname, cents) in [
+            ('Subscriptions & Digital', 'Gaming Subscriptions', 99999999),
+            ('Entertainment & Fun', 'Streaming', 1500),
+            ('Food & Drinks', 'Coffee', 450),
+          ]) {
+            await db.expensesDao.add(
+              subcategoryId: CatalogueSeeder.subcategoryId(c, sname),
+              amountCents: cents,
+              date: now,
+              note: 'A fairly long note that should be truncated nicely',
+            );
+          }
+        });
+        tester.view
+          ..physicalSize = const Size(750, 1334)
+          ..devicePixelRatio = 2;
+        addTearDown(tester.view.reset);
+
+        await tester.pumpWidget(
+          ProviderScope(
+            overrides: [appDatabaseProvider.overrideWithValue(db)],
+            child: MaterialApp(
+              builder: (context, child) => MediaQuery(
+                data: MediaQuery.of(
+                  context,
+                ).copyWith(textScaler: TextScaler.linear(textScale)),
+                child: child!,
+              ),
+              home: screen,
+            ),
+          ),
+        );
+        await tester.runAsync(
+          () => Future<void>.delayed(const Duration(milliseconds: 100)),
+        );
+        await tester.pumpAndSettle();
+        await tester.drag(
+          find.byType(Scrollable).first,
           const Offset(0, -3000),
         );
         await tester.pumpAndSettle();

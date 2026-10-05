@@ -142,7 +142,8 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
                             child: _TopCategoriesCard(
                               categories: view.categories,
                               total: view.monthTotalCents ?? 0,
-                              onSeeAll: () => context.go(AppRoutes.statistics),
+                              onSeeAll: () =>
+                                  context.push(AppRoutes.categories),
                               onCategoryTap: _openCategory,
                             ),
                           ),

@@ -9,6 +9,7 @@ import '../../features/auth/sign_in_screen.dart';
 import '../../features/auth/sign_up_screen.dart';
 import '../../features/auth/verify_reset_code_screen.dart';
 import '../../features/categories/categories_screen.dart';
+import '../../features/expense_list/expense_list_screen.dart';
 import '../../features/history/history_screen.dart';
 import '../../features/home/home_screen.dart';
 import '../../features/profile/profile_screen.dart';
@@ -124,6 +125,11 @@ final appRouter = GoRouter(
           child: child,
         ),
       ),
+    ),
+    GoRoute(
+      path: AppRoutes.expenses,
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (context, state) => const ExpenseListScreen(),
     ),
     for (final (path, screen) in [
       (AppRoutes.profileEdit, const EditProfileScreen()),

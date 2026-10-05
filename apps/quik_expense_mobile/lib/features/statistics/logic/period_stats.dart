@@ -8,7 +8,8 @@ enum StatsPeriod {
   week('Week', 'Daily Avg'),
   month('Month', 'Weekly Avg'),
   sixMonths('6M', 'Monthly Avg'),
-  year('Year', 'Monthly Avg');
+  year('Year', 'Monthly Avg'),
+  all('All', 'Yearly Avg');
 
   const StatsPeriod(this.label, this.averageLabel);
   final String label;
@@ -115,6 +116,20 @@ PeriodWindow windowFor(StatsPeriod period, DateTime now) {
         buckets: buckets,
       );
 
+    case StatsPeriod.all:
+      // The span isn't known until the data loads (see `_yearBuckets` in
+      // `buildPeriodStats`) — this window just needs to load everything,
+      // with no "previous period" to compare against.
+      final epoch = DateTime(2000);
+      return PeriodWindow(
+        current: (
+          from: epoch,
+          to: DateTime(today.year, today.month, today.day + 1),
+        ),
+        previous: (from: epoch, to: epoch),
+        buckets: const [],
+      );
+
     case StatsPeriod.sixMonths:
     case StatsPeriod.year:
       final count = period == StatsPeriod.year ? 12 : 6;
@@ -187,10 +202,12 @@ PeriodStats buildPeriodStats(
 ) {
   final current = inRange(expenses, window.current).toList();
   final previous = inRange(expenses, window.previous);
-  final buckets = [
-    for (final b in window.buckets)
-      b.withTotal(sumCents(inRange(current, b.range))),
-  ];
+  final buckets = period == StatsPeriod.all
+      ? _yearBuckets(current, now)
+      : [
+          for (final b in window.buckets)
+            b.withTotal(sumCents(inRange(current, b.range))),
+        ];
   final total = sumCents(current);
   final elapsed = buckets.where((b) => !b.isFuture(now)).length;
 
@@ -203,4 +220,26 @@ PeriodStats buildPeriodStats(
     categories: categoryTotals(current, previous: previous),
     now: now,
   );
+}
+
+/// One bar per calendar year from the earliest expense through [now]. Only
+/// used for [StatsPeriod.all], whose span (unlike the other periods' fixed
+/// calendar windows) isn't known until the data is actually loaded.
+List<StatsBucket> _yearBuckets(List<ExpenseDetails> expenses, DateTime now) {
+  final startYear = expenses.isEmpty
+      ? now.year
+      : expenses
+            .map((e) => e.expense.date.year)
+            .reduce((a, b) => a < b ? a : b);
+  return [
+    for (var year = startYear; year <= now.year; year++)
+      StatsBucket(
+        label: '$year',
+        range: (from: DateTime(year), to: DateTime(year + 1)),
+      ).withTotal(
+        sumCents(
+          inRange(expenses, (from: DateTime(year), to: DateTime(year + 1))),
+        ),
+      ),
+  ];
 }

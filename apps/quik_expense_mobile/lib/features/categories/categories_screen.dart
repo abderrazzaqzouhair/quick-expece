@@ -1,51 +1,28 @@
+import 'package:database/database.dart';
 import 'package:flutter/material.dart';
-import 'package:intl/intl.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:go_router/go_router.dart';
 import 'package:ui_kit/ui_kit.dart';
 
-/// UI-only — the "See all" destination from Home's Top Categories section.
-/// Mirrors the same mock category data (name/color/icon/amount) as
-/// `HomeScreen` so the two screens read as one consistent demo instead of
-/// unrelated numbers; wires to the real `categories` package's providers
-/// once they exist.
-class CategoriesScreen extends StatelessWidget {
+import '../../config/router/app_routes.dart';
+import '../../shared/category_visuals.dart';
+import '../../shared/formatters.dart';
+import '../../shared/haptics.dart';
+import '../../shared/spending.dart';
+import '../expense_list/expense_list_controller.dart';
+import '../history/widgets/history_empty_state.dart';
+import '../statistics/logic/period_stats.dart';
+
+/// This month's categories, biggest spend first, each with a trend vs last
+/// month — live from the local database. Tapping a category opens the
+/// expense list filtered to it.
+class CategoriesScreen extends ConsumerWidget {
   const CategoriesScreen({super.key});
 
-  static const _categories = [
-    _CategorySpend(
-      name: 'Food & Drinks',
-      color: Color(0xFFF59E0B),
-      iconAsset: AppAssets.iconCategoryFood,
-      amount: 450.00,
-      monthlyDeltaPercent: 12,
-    ),
-    _CategorySpend(
-      name: 'Transport',
-      color: Color(0xFF3B82F6),
-      iconAsset: AppAssets.iconCategoryTransport,
-      amount: 275.50,
-      monthlyDeltaPercent: -8,
-    ),
-    _CategorySpend(
-      name: 'Entertainment & Fun',
-      color: Color(0xFF8B5CF6),
-      iconAsset: AppAssets.iconCategoryEntertainment,
-      amount: 190.00,
-      monthlyDeltaPercent: 22,
-    ),
-    _CategorySpend(
-      name: 'Subscriptions & Digital',
-      color: Color(0xFF6366F1),
-      iconAsset: AppAssets.iconCategorySubscriptions,
-      amount: 132.75,
-      monthlyDeltaPercent: -5,
-    ),
-  ];
-
   @override
-  Widget build(BuildContext context) {
-    final ranked = [..._categories]
-      ..sort((a, b) => b.amount.compareTo(a.amount));
-    final total = ranked.fold(0.0, (sum, c) => sum + c.amount);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final window = windowFor(StatsPeriod.month, DateTime.now());
+    final data = ref.watch(expensesInRangeProvider(window.loadRange));
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -56,51 +33,113 @@ class CategoriesScreen extends StatelessWidget {
         elevation: 0,
         scrolledUnderElevation: 0,
       ),
-      body: ListView(
-        padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
-        children: [
-          _TotalSpendCard(total: total),
-          const SizedBox(height: 24),
-          for (final category in ranked)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 12),
-              child: _CategoryListTile(
-                category: category,
-                shareOfTotal: total == 0 ? 0 : category.amount / total,
-              ),
-            ),
-        ],
-      ),
+      body: switch (data) {
+        AsyncValue(hasValue: false, hasError: false) => const _Loading(),
+        AsyncValue(hasError: true) => const Center(
+          child: Text(
+            'Could not load your categories.',
+            style: TextStyle(color: AppColors.error),
+          ),
+        ),
+        _ => _Content(
+          current: inRange(data.value!, window.current).toList(),
+          previous: inRange(data.value!, window.previous),
+        ),
+      },
     );
   }
 }
 
-class _CategorySpend {
-  const _CategorySpend({
-    required this.name,
-    required this.color,
-    required this.iconAsset,
-    required this.amount,
-    required this.monthlyDeltaPercent,
-  });
+class _Content extends ConsumerWidget {
+  const _Content({required this.current, required this.previous});
 
-  final String name;
-  final Color color;
-  final String iconAsset;
-  final double amount;
-  final int monthlyDeltaPercent;
+  final List<ExpenseDetails> current;
+  final Iterable<ExpenseDetails> previous;
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    if (current.isEmpty) {
+      return HistoryEmptyState(
+        icon: Icons.category_rounded,
+        title: 'No expenses this month',
+        message: 'Add an expense and its category will show up here.',
+        actionLabel: 'Add expense',
+        onAction: () => context.push(AppRoutes.addExpense),
+      );
+    }
+
+    final categories = categoryTotals(current, previous: previous);
+    final total = sumCents(current);
+
+    return ListView(
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        _TotalSpendCard(totalCents: total),
+        const SizedBox(height: 24),
+        for (final spend in categories)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: _CategoryListTile(
+              spend: spend,
+              shareOfTotal: total == 0 ? 0 : spend.totalCents / total,
+              onTap: () {
+                Haptics.selection();
+                ref
+                    .read(expenseListControllerProvider.notifier)
+                    .openFor(StatsPeriod.month, categoryId: spend.category.id);
+                context.push(AppRoutes.expenses);
+              },
+            ),
+          ),
+      ],
+    );
+  }
 }
 
-String _formatMad(double amount) =>
-    '${NumberFormat('#,##0.00', 'en_US').format(amount)} MAD';
+class _Loading extends StatelessWidget {
+  const _Loading();
+
+  @override
+  Widget build(BuildContext context) {
+    return ListView(
+      physics: const NeverScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(16, 8, 16, 24),
+      children: [
+        AppSkeleton.onDark(
+          child: Container(
+            height: 104,
+            decoration: BoxDecoration(
+              color: AppColors.textPrimary,
+              borderRadius: BorderRadius.circular(22),
+            ),
+          ),
+        ),
+        const SizedBox(height: 24),
+        for (var i = 0; i < 4; i++)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 12),
+            child: AppSkeleton(
+              child: Container(
+                height: 96,
+                decoration: BoxDecoration(
+                  color: AppColors.surface,
+                  borderRadius: BorderRadius.circular(18),
+                ),
+              ),
+            ),
+          ),
+      ],
+    );
+  }
+}
 
 /// This month's total across every category — the dark gradient tile from
 /// Home's "This Month" summary card, so the two screens share one visual
 /// language for "the big number".
 class _TotalSpendCard extends StatelessWidget {
-  const _TotalSpendCard({required this.total});
+  const _TotalSpendCard({required this.totalCents});
 
-  final double total;
+  final int totalCents;
 
   @override
   Widget build(BuildContext context) {
@@ -138,7 +177,7 @@ class _TotalSpendCard extends StatelessWidget {
           ),
           const SizedBox(height: 10),
           Text(
-            _formatMad(total),
+            formatMad(totalCents),
             style: const TextStyle(
               fontSize: 26,
               fontWeight: FontWeight.w800,
@@ -152,121 +191,170 @@ class _TotalSpendCard extends StatelessWidget {
 }
 
 /// One row per category: icon + name + trend on top, amount on the right,
-/// and a share-of-total progress bar underneath — the "subtle element that
-/// makes the card feel alive" a plain list row is missing.
+/// and a share-of-total progress bar underneath.
 class _CategoryListTile extends StatelessWidget {
-  const _CategoryListTile({required this.category, required this.shareOfTotal});
+  const _CategoryListTile({
+    required this.spend,
+    required this.shareOfTotal,
+    required this.onTap,
+  });
 
-  final _CategorySpend category;
+  final CategorySpend spend;
   final double shareOfTotal;
+  final VoidCallback onTap;
 
   static const _trendDown = Color(0xFF2FB457);
   static const _trendUp = Color(0xFFE5484D);
 
   @override
   Widget build(BuildContext context) {
-    final delta = category.monthlyDeltaPercent;
-    final isUp = delta >= 0;
-    final trendIcon = isUp
-        ? Icons.arrow_upward_rounded
-        : Icons.arrow_downward_rounded;
-    final trendColor = isUp ? _trendUp : _trendDown;
+    final delta = spend.deltaPercent;
+    final color = CategoryVisuals.colorFor(spend.category.color);
 
-    return Container(
-      padding: const EdgeInsets.all(14),
-      decoration: BoxDecoration(
-        color: AppColors.surface,
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(18),
+      child: InkWell(
+        onTap: onTap,
         borderRadius: BorderRadius.circular(18),
-        border: Border.all(color: const Color(0xFFF1F3F5)),
-        boxShadow: [
-          BoxShadow(
-            color: Colors.black.withValues(alpha: 0.03),
-            blurRadius: 10,
-            offset: const Offset(0, 3),
-          ),
-        ],
-      ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            crossAxisAlignment: CrossAxisAlignment.center,
-            children: [
-              AppIconBadge(
-                assetPath: category.iconAsset,
-                color: category.color,
-                backgroundAlpha: 0.12,
-                size: 40,
-                iconSize: 22,
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: const Color(0xFFF1F3F5)),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: 0.03),
+                blurRadius: 10,
+                offset: const Offset(0, 3),
               ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      category.name,
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(
-                        fontSize: 14,
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.textPrimary,
-                      ),
-                    ),
-                    const SizedBox(height: 3),
-                    Row(
-                      mainAxisSize: MainAxisSize.min,
+            ],
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  CategoryAvatar(
+                    name: spend.category.name,
+                    colorHex: spend.category.color,
+                    size: 40,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Icon(trendIcon, size: 12, color: trendColor),
-                        const SizedBox(width: 3),
                         Text(
-                          '${delta.abs()}% vs last mo.',
-                          style: TextStyle(
-                            fontSize: 11.5,
-                            fontWeight: FontWeight.w600,
-                            color: trendColor,
+                          spend.category.name,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w700,
+                            color: AppColors.textPrimary,
                           ),
+                        ),
+                        const SizedBox(height: 3),
+                        Row(
+                          children: delta == null
+                              ? const [
+                                  Icon(
+                                    Icons.auto_awesome_rounded,
+                                    size: 12,
+                                    color: AppColors.textSecondary,
+                                  ),
+                                  SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      'New this month',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: AppColors.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ]
+                              : [
+                                  Icon(
+                                    delta >= 0
+                                        ? Icons.arrow_upward_rounded
+                                        : Icons.arrow_downward_rounded,
+                                    size: 12,
+                                    color: delta >= 0 ? _trendUp : _trendDown,
+                                  ),
+                                  const SizedBox(width: 3),
+                                  Flexible(
+                                    child: Text(
+                                      '${delta.abs()}% vs last mo.',
+                                      maxLines: 1,
+                                      overflow: TextOverflow.ellipsis,
+                                      style: TextStyle(
+                                        fontSize: 11.5,
+                                        fontWeight: FontWeight.w600,
+                                        color: delta >= 0
+                                            ? _trendUp
+                                            : _trendDown,
+                                      ),
+                                    ),
+                                  ),
+                                ],
                         ),
                       ],
                     ),
-                  ],
+                  ),
+                  const SizedBox(width: 8),
+                  Flexible(
+                    child: FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        formatMad(spend.totalCents),
+                        style: const TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w800,
+                          color: AppColors.textPrimary,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 4),
+                  const Icon(
+                    Icons.chevron_right_rounded,
+                    size: 18,
+                    color: AppColors.textSecondary,
+                  ),
+                ],
+              ),
+              const SizedBox(height: 12),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(4),
+                child: LinearProgressIndicator(
+                  value: shareOfTotal.clamp(0.0, 1.0),
+                  minHeight: 6,
+                  backgroundColor: AppColors.background,
+                  valueColor: AlwaysStoppedAnimation(color),
                 ),
               ),
-              const SizedBox(width: 8),
-              Text(
-                _formatMad(category.amount),
-                style: const TextStyle(
-                  fontSize: 14,
-                  fontWeight: FontWeight.w800,
-                  color: AppColors.textPrimary,
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerRight,
+                child: Text(
+                  '${(shareOfTotal * 100).round()}% of spend',
+                  style: const TextStyle(
+                    fontSize: 11,
+                    fontWeight: FontWeight.w600,
+                    color: AppColors.textSecondary,
+                  ),
                 ),
               ),
             ],
           ),
-          const SizedBox(height: 12),
-          ClipRRect(
-            borderRadius: BorderRadius.circular(4),
-            child: LinearProgressIndicator(
-              value: shareOfTotal.clamp(0.0, 1.0),
-              minHeight: 6,
-              backgroundColor: AppColors.background,
-              valueColor: AlwaysStoppedAnimation(category.color),
-            ),
-          ),
-          const SizedBox(height: 6),
-          Align(
-            alignment: Alignment.centerRight,
-            child: Text(
-              '${(shareOfTotal * 100).round()}% of spend',
-              style: const TextStyle(
-                fontSize: 11,
-                fontWeight: FontWeight.w600,
-                color: AppColors.textSecondary,
-              ),
-            ),
-          ),
-        ],
+        ),
       ),
     );
   }
