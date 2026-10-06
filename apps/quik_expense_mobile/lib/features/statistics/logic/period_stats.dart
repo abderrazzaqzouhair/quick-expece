@@ -5,6 +5,7 @@ import 'package:intl/intl.dart';
 import '../../../shared/spending.dart';
 
 enum StatsPeriod {
+  today('Today', 'Avg Spend'),
   week('Week', 'Daily Avg'),
   month('Month', 'Weekly Avg'),
   sixMonths('6M', 'Monthly Avg'),
@@ -64,6 +65,27 @@ PeriodWindow windowFor(StatsPeriod period, DateTime now) {
   final today = DateTime(now.year, now.month, now.day);
 
   switch (period) {
+    case StatsPeriod.today:
+      final tomorrow = DateTime(today.year, today.month, today.day + 1);
+      final yesterday = DateTime(today.year, today.month, today.day - 1);
+      // Fixed quarters rather than hourly buckets — readable on the trend
+      // chart and still gives a sense of when today's spending happened.
+      const labels = ['Night', 'Morning', 'Afternoon', 'Evening'];
+      return PeriodWindow(
+        current: (from: today, to: tomorrow),
+        previous: (from: yesterday, to: today),
+        buckets: [
+          for (var i = 0; i < 4; i++)
+            StatsBucket(
+              label: labels[i],
+              range: (
+                from: DateTime(today.year, today.month, today.day, i * 6),
+                to: DateTime(today.year, today.month, today.day, i * 6 + 6),
+              ),
+            ),
+        ],
+      );
+
     case StatsPeriod.week:
       final monday = DateTime(
         today.year,

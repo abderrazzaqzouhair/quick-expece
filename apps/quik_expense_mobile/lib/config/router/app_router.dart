@@ -105,6 +105,11 @@ final appRouter = GoRouter(
       builder: (context, state) => const CategoriesScreen(),
     ),
     GoRoute(
+      path: AppRoutes.expenses,
+      parentNavigatorKey: _rootNavigatorKey,
+      builder: (context, state) => const ExpenseListScreen(),
+    ),
+    GoRoute(
       path: AppRoutes.addExpense,
       parentNavigatorKey: _rootNavigatorKey,
       // Presented like an iOS modal: slides up from the bottom.
@@ -125,11 +130,6 @@ final appRouter = GoRouter(
           child: child,
         ),
       ),
-    ),
-    GoRoute(
-      path: AppRoutes.expenses,
-      parentNavigatorKey: _rootNavigatorKey,
-      builder: (context, state) => const ExpenseListScreen(),
     ),
     for (final (path, screen) in [
       (AppRoutes.profileEdit, const EditProfileScreen()),

@@ -137,5 +137,29 @@ void main() {
       );
       expect(fullPage.hasMore, isFalse);
     });
+
+    test(
+      'hidden (optimistically-deleted) expenses disappear everywhere',
+      () async {
+        final all = await seed([
+          ('Food & Drinks', 'Coffee', 500, DateTime(2026, 9, 1), null),
+          ('Transport', 'Taxi', 3000, DateTime(2026, 9, 2), null),
+        ]);
+        final taxiId = all
+            .firstWhere((e) => e.subcategory.name == 'Taxi')
+            .expense
+            .id;
+
+        final view = buildExpenseListView(
+          all,
+          const ExpenseListFilters(period: StatsPeriod.month),
+          visibleCount: 30,
+          hiddenIds: {taxiId},
+        );
+        expect(view.periodCount, 1);
+        expect(view.filteredCount, 1);
+        expect(view.categories.map((c) => c.category.name), ['Food & Drinks']);
+      },
+    );
   });
 }

@@ -98,6 +98,19 @@ void main() {
   group('statistics', () {
     final now = DateTime(2026, 9, 16, 12); // Wednesday
 
+    test('today window is quarter-day buckets vs yesterday', () {
+      final w = windowFor(StatsPeriod.today, now); // noon
+      expect(w.current.from, DateTime(2026, 9, 16));
+      expect(w.current.to, DateTime(2026, 9, 17));
+      expect(w.previous.from, DateTime(2026, 9, 15));
+      expect(w.previous.to, DateTime(2026, 9, 16));
+      expect(w.buckets.map((b) => b.label), [
+        'Night', 'Morning', 'Afternoon', 'Evening', //
+      ]);
+      expect(w.buckets[2].isCurrent(now), isTrue); // noon falls in Afternoon
+      expect(w.buckets[3].isFuture(now), isTrue); // Evening hasn't started
+    });
+
     test('week window is Mon–Sun with 7 daily buckets', () {
       final w = windowFor(StatsPeriod.week, now);
       expect(w.current.from, DateTime(2026, 9, 14));

@@ -181,6 +181,7 @@ Color _colorOf(CategorySpend spend) =>
     CategoryVisuals.colorFor(spend.category.color);
 
 String _periodPhrase(StatsPeriod period) => switch (period) {
+  StatsPeriod.today => 'today',
   StatsPeriod.week => 'this week',
   StatsPeriod.month => 'this month',
   StatsPeriod.sixMonths => 'in the last 6 months',
@@ -191,11 +192,11 @@ String _periodPhrase(StatsPeriod period) => switch (period) {
 /// Full name of a bucket for the insight tiles: "Wednesday", "Week 2",
 /// "Sep 2026".
 String _bucketName(StatsPeriod period, StatsBucket bucket) => switch (period) {
+  StatsPeriod.today || StatsPeriod.all => bucket.label,
   StatsPeriod.week => DateFormat.EEEE('en_US').format(bucket.range.from),
   StatsPeriod.month => 'Week ${bucket.label.substring(1)}',
   StatsPeriod.sixMonths ||
   StatsPeriod.year => DateFormat.yMMM('en_US').format(bucket.range.from),
-  StatsPeriod.all => bucket.label,
 };
 
 /// Total spent + period average, in the same two-gradient-tile language as

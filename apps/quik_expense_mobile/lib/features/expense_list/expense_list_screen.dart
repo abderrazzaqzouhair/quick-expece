@@ -261,6 +261,7 @@ class _ExpenseListScreenState extends ConsumerState<ExpenseListScreen> {
 }
 
 String _periodPhrase(StatsPeriod period) => switch (period) {
+  StatsPeriod.today => 'today',
   StatsPeriod.week => 'this week',
   StatsPeriod.month => 'this month',
   StatsPeriod.sixMonths => 'in the last 6 months',
