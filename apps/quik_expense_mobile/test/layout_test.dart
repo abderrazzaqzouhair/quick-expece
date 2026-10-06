@@ -117,6 +117,10 @@ void main() {
       testWidgets('$name fits iPhone SE at text scale $textScale', (
         tester,
       ) async {
+        SharedPreferences.setMockInitialValues({
+          'profile.name': 'Abdelkarim Benjelloun El Idrissi',
+        });
+        final prefs = await SharedPreferences.getInstance();
         final db = AppDatabase(NativeDatabase.memory());
         await tester.runAsync(() async {
           final now = DateTime.now();
@@ -142,7 +146,10 @@ void main() {
 
         await tester.pumpWidget(
           ProviderScope(
-            overrides: [appDatabaseProvider.overrideWithValue(db)],
+            overrides: [
+              appDatabaseProvider.overrideWithValue(db),
+              sharedPreferencesProvider.overrideWithValue(prefs),
+            ],
             child: MaterialApp(
               builder: (context, child) => MediaQuery(
                 data: MediaQuery.of(

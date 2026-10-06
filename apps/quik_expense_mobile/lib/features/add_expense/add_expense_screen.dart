@@ -23,7 +23,11 @@ import '../../shared/haptics.dart';
 /// built-in keypad → category sheet → save. Date and note are optional
 /// pills. The save button names the next missing step and acts on it.
 class AddExpenseScreen extends ConsumerStatefulWidget {
-  const AddExpenseScreen({super.key});
+  const AddExpenseScreen({super.key, this.initialChoice});
+
+  /// Pre-picked category (e.g. from Home's Quick Add) — the user only has
+  /// to type the amount.
+  final CategoryChoice? initialChoice;
 
   @override
   ConsumerState<AddExpenseScreen> createState() => _AddExpenseScreenState();
@@ -31,6 +35,20 @@ class AddExpenseScreen extends ConsumerStatefulWidget {
 
 class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
   int _shake = 0;
+
+  @override
+  void initState() {
+    super.initState();
+    final choice = widget.initialChoice;
+    if (choice != null) {
+      // Providers can't change during the first build — apply right after.
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) {
+          _controller.selectSubcategory(choice.category, choice.subcategory);
+        }
+      });
+    }
+  }
 
   AddExpenseController get _controller =>
       ref.read(addExpenseControllerProvider.notifier);
@@ -114,13 +132,16 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
     final state = ref.watch(addExpenseControllerProvider);
     final cents = state.amountCents;
 
+    final bottomInset = MediaQuery.paddingOf(context).bottom;
+
     return Scaffold(
       backgroundColor: AppColors.background,
       body: SafeArea(
+        bottom: false, // the keypad panel pads itself to the edge
         child: LayoutBuilder(
           builder: (context, constraints) {
             // Keys shrink on short phones so everything stays on one screen.
-            final keyHeight = (constraints.maxHeight * 0.075).clamp(46.0, 64.0);
+            final keyHeight = (constraints.maxHeight * 0.068).clamp(44.0, 58.0);
 
             return Column(
               children: [
@@ -129,13 +150,22 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                   child: Column(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
+                      const Text(
+                        'How much?',
+                        style: TextStyle(
+                          fontSize: 15,
+                          fontWeight: FontWeight.w500,
+                          color: AppColors.textSecondary,
+                        ),
+                      ),
+                      const SizedBox(height: 4),
                       AmountDisplay(
                         text: state.amountText,
                         shakeTrigger: _shake,
                       ),
-                      const SizedBox(height: 28),
+                      const SizedBox(height: 24),
                       Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 24),
+                        padding: const EdgeInsets.symmetric(horizontal: 20),
                         child: CategoryField(
                           category: state.category,
                           subcategory: state.subcategory,
@@ -171,21 +201,40 @@ class _AddExpenseScreenState extends ConsumerState<AddExpenseScreen> {
                     ],
                   ),
                 ),
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 12),
-                  child: AmountKeypad(
-                    keyHeight: keyHeight,
-                    onKey: _onKey,
-                    onClear: _controller.clearAmount,
+                // Input panel: keypad + primary action on a white sheet.
+                Container(
+                  padding: EdgeInsets.fromLTRB(12, 12, 12, 12 + bottomInset),
+                  decoration: BoxDecoration(
+                    color: AppColors.surface,
+                    borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(32),
+                    ),
+                    boxShadow: [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.06),
+                        blurRadius: 24,
+                        offset: const Offset(0, -6),
+                      ),
+                    ],
                   ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.fromLTRB(16, 12, 16, 12),
-                  child: SaveButton(
-                    step: state.step,
-                    isSaving: state.isSaving,
-                    amountLabel: cents == null ? '' : formatMad(cents),
-                    onPressed: _onPrimary,
+                  child: Column(
+                    children: [
+                      AmountKeypad(
+                        keyHeight: keyHeight,
+                        onKey: _onKey,
+                        onClear: _controller.clearAmount,
+                      ),
+                      const SizedBox(height: 10),
+                      Padding(
+                        padding: const EdgeInsets.symmetric(horizontal: 4),
+                        child: SaveButton(
+                          step: state.step,
+                          isSaving: state.isSaving,
+                          amountLabel: cents == null ? '' : formatMad(cents),
+                          onPressed: _onPrimary,
+                        ),
+                      ),
+                    ],
                   ),
                 ),
               ],
@@ -206,6 +255,7 @@ class _TopBar extends StatelessWidget {
   Widget build(BuildContext context) {
     return SizedBox(
       height: 56,
+      width: double.infinity, // else the Stack shrinks to the title
       child: Stack(
         alignment: Alignment.center,
         children: [

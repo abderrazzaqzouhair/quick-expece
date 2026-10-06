@@ -3,6 +3,8 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 
 import '../../features/add_expense/add_expense_screen.dart';
+import '../../features/add_expense/widgets/category_picker_sheet.dart'
+    show CategoryChoice;
 import '../../features/auth/forgot_password_screen.dart';
 import '../../features/auth/reset_password_screen.dart';
 import '../../features/auth/sign_in_screen.dart';
@@ -118,7 +120,12 @@ final appRouter = GoRouter(
         fullscreenDialog: true,
         transitionDuration: const Duration(milliseconds: 380),
         reverseTransitionDuration: const Duration(milliseconds: 260),
-        child: const AddExpenseScreen(),
+        child: AddExpenseScreen(
+          // Quick Add passes the category to pre-pick.
+          initialChoice: state.extra is CategoryChoice
+              ? state.extra! as CategoryChoice
+              : null,
+        ),
         transitionsBuilder: (context, animation, _, child) => SlideTransition(
           position: Tween(begin: const Offset(0, 1), end: Offset.zero).animate(
             CurvedAnimation(

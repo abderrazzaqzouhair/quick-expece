@@ -414,16 +414,12 @@ class _SubcategoryRow extends StatelessWidget {
                     ),
                   ),
                 ),
+                // Picker, not navigation: only the current choice gets a mark.
                 if (selected)
                   const Icon(
                     Icons.check_rounded,
                     color: AppColors.primary,
                     size: 22,
-                  )
-                else
-                  Icon(
-                    Icons.chevron_right_rounded,
-                    color: AppColors.textSecondary.withValues(alpha: 0.5),
                   ),
               ],
             ),

@@ -58,6 +58,7 @@ class AppPrimaryButton extends StatelessWidget {
                   : null,
               color: isEnabled ? null : AppColors.border,
             ),
+            padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Center(
               child: isLoading
                   ? const SizedBox(
@@ -71,14 +72,20 @@ class AppPrimaryButton extends StatelessWidget {
                   : Row(
                       mainAxisSize: MainAxisSize.min,
                       children: [
-                        Text(
-                          label,
-                          style: TextStyle(
-                            fontSize: 16,
-                            fontWeight: FontWeight.w600,
-                            color: isEnabled
-                                ? AppColors.onPrimary
-                                : AppColors.textSecondary,
+                        // Shortens rather than overflows on narrow screens
+                        // or with large system text.
+                        Flexible(
+                          child: Text(
+                            label,
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: isEnabled
+                                  ? AppColors.onPrimary
+                                  : AppColors.textSecondary,
+                            ),
                           ),
                         ),
                         if (trailingIcon != null) ...[

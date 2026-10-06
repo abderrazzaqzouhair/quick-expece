@@ -92,6 +92,25 @@ void main() {
       expect(emptyMonth.categories, isEmpty);
 
       expect(daysWithSpend(all), contains(DateTime(2026, 9, 15)));
+
+      expect(view.dayCount, 2);
+      expect(view.monthCount, 3);
+      expect(view.previousMonthCents, 1800);
+      expect(view.monthDeltaPercent, 125); // 4050 vs 1800
+      expect(emptyMonth.monthDeltaPercent, isNull);
+    });
+
+    test('weekOf is Monday-first and DST-safe', () {
+      final week = weekOf(DateTime(2026, 10, 1)); // Thursday
+      expect(week.first, DateTime(2026, 9, 28));
+      expect(week.last, DateTime(2026, 10, 4));
+      expect(week.every((d) => d.hour == 0), isTrue);
+    });
+
+    test('greetingFor', () {
+      expect(greetingFor(DateTime(2026, 1, 1, 8)), 'Good morning');
+      expect(greetingFor(DateTime(2026, 1, 1, 14)), 'Good afternoon');
+      expect(greetingFor(DateTime(2026, 1, 1, 21)), 'Good evening');
     });
   });
 

@@ -91,12 +91,12 @@ class _DateSheetState extends State<_DateSheet> {
             borderRadius: BorderRadius.circular(16),
           ),
           child: CupertinoTheme(
-            data: const CupertinoThemeData(
+            data: CupertinoThemeData(
               textTheme: CupertinoTextThemeData(
-                dateTimePickerTextStyle: TextStyle(
-                  fontSize: 21,
-                  color: AppColors.textPrimary,
-                ),
+                // Keep the app font (Inter) in the wheel.
+                dateTimePickerTextStyle: DefaultTextStyle.of(
+                  context,
+                ).style.copyWith(fontSize: 21, color: AppColors.textPrimary),
               ),
             ),
             child: CupertinoDatePicker(

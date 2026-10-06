@@ -1,7 +1,7 @@
-import 'dart:math' as math;
-
+import 'package:database/database.dart';
 import 'package:fl_chart/fl_chart.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
@@ -9,12 +9,20 @@ import 'package:ui_kit/ui_kit.dart';
 
 import '../../config/router/app_routes.dart';
 import '../../shared/category_visuals.dart';
+import '../../shared/csv_export.dart';
 import '../../shared/formatters.dart';
 import '../../shared/spending.dart';
 import '../../shared/widgets/period_selector.dart';
+import '../../config/providers/database_providers.dart';
+import '../../shared/widgets/app_toast.dart';
 import '../expense_list/expense_list_controller.dart';
+import '../history/widgets/expense_detail_sheet.dart';
+import 'logic/period_details.dart';
 import 'logic/period_stats.dart';
+import 'widgets/compare_sheet.dart';
+import 'widgets/detail_sections.dart';
 import 'widgets/statistics_skeleton.dart';
+import 'widgets/trend_card.dart';
 import '../../shared/haptics.dart';
 
 /// Spending analytics for a period (this week / this month / last 6 months
@@ -34,6 +42,56 @@ class _StatisticsScreenState extends ConsumerState<StatisticsScreen> {
   /// Last computed stats — kept while another period loads so switching
   /// doesn't flash back to the skeleton.
   PeriodStats? _lastStats;
+  PeriodDetails? _lastDetails;
+  List<ExpenseDetails> _lastPeriodExpenses = const [];
+  PeriodWindow? _lastWindow;
+
+  /// Copies the selected period's expenses as CSV.
+  Future<void> _exportPeriod() async {
+    final messenger = ScaffoldMessenger.of(context);
+    final rows = _lastPeriodExpenses;
+    if (rows.isEmpty) {
+      messenger.showSnackBar(appToast('No expenses in this period.'));
+      return;
+    }
+    await Clipboard.setData(ClipboardData(text: expensesCsv(rows)));
+    Haptics.medium();
+    messenger.showSnackBar(
+      appToast(
+        '${rows.length} ${rows.length == 1 ? 'expense' : 'expenses'} copied '
+        'as CSV — paste into Sheets or Excel',
+        kind: ToastKind.success,
+      ),
+    );
+  }
+
+  void _comparePeriod() {
+    final window = _lastWindow;
+    final stats = _lastStats;
+    if (window == null || stats == null) return;
+    Haptics.selection();
+    showCompareSheet(context, period: stats.period, window: window);
+  }
+
+  /// Details sheet for a largest-expense row; Delete offers Undo.
+  Future<void> _openExpense(ExpenseDetails details) async {
+    final delete = await showExpenseDetailSheet(context, details);
+    if (delete != true || !mounted) return;
+    Haptics.medium();
+    final messenger = ScaffoldMessenger.of(context);
+    final dao = ref.read(appDatabaseProvider).expensesDao;
+    await dao.softDelete(details.expense.id);
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        appToast(
+          '${details.subcategory.name} · '
+          '${formatMad(details.expense.amountCents)} deleted',
+          actionLabel: 'Undo',
+          onAction: () => dao.restore(details.expense.id),
+        ),
+      );
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,8 +100,12 @@ class _StatisticsScreenState extends ConsumerState<StatisticsScreen> {
     final data = ref.watch(expensesInRangeProvider(window.loadRange));
     if (data.hasValue) {
       _lastStats = buildPeriodStats(_period, window, data.value!, now);
+      _lastDetails = buildPeriodDetails(_period, window, data.value!, now);
+      _lastPeriodExpenses = inRange(data.value!, window.current).toList();
+      _lastWindow = window;
     }
     final stats = _lastStats;
+    final details = _lastDetails;
 
     return Scaffold(
       backgroundColor: AppColors.background,
@@ -65,15 +127,22 @@ class _StatisticsScreenState extends ConsumerState<StatisticsScreen> {
             ),
             const SizedBox(height: 20),
             SkeletonSwitcher(
-              isLoading: stats == null,
+              isLoading: stats == null || details == null,
               skeleton: const StatisticsSkeleton(),
-              child: stats == null
+              child: stats == null || details == null
                   ? const SizedBox.shrink()
                   : AnimatedOpacity(
                       opacity: data.isLoading ? 0.6 : 1,
                       duration: const Duration(milliseconds: 200),
                       child: _StatsBody(
                         stats: stats,
+                        details: details,
+                        onOpenExpense: _openExpense,
+                        onExport: _exportPeriod,
+                        // "All" has nothing before it to compare with.
+                        onCompare: stats.period == StatsPeriod.all
+                            ? null
+                            : _comparePeriod,
                         onViewAll: () {
                           Haptics.selection();
                           ref
@@ -92,9 +161,20 @@ class _StatisticsScreenState extends ConsumerState<StatisticsScreen> {
 }
 
 class _StatsBody extends StatelessWidget {
-  const _StatsBody({required this.stats, required this.onViewAll});
+  const _StatsBody({
+    required this.stats,
+    required this.details,
+    required this.onOpenExpense,
+    required this.onExport,
+    required this.onCompare,
+    required this.onViewAll,
+  });
 
   final PeriodStats stats;
+  final PeriodDetails details;
+  final ValueChanged<ExpenseDetails> onOpenExpense;
+  final VoidCallback onExport;
+  final VoidCallback? onCompare;
   final VoidCallback onViewAll;
 
   @override
@@ -112,12 +192,61 @@ class _StatsBody extends StatelessWidget {
             ),
           )
         else ...[
-          _SectionCard(child: _SpendingTrendSection(stats: stats)),
+          // Dark card of its own; keyed so the selected bar resets per period.
+          TrendCard(key: ValueKey(stats.period), stats: stats),
           const SizedBox(height: 24),
           _InsightsRow(stats: stats),
           const SizedBox(height: 24),
           _SectionCard(child: _CategoryBreakdownSection(stats: stats)),
+          const SizedBox(height: 24),
+          _SectionCard(
+            child: TopSubcategoriesSection(
+              items: details.topSubcategories,
+              totalCents: stats.totalCents,
+            ),
+          ),
+          // A single day has no weekday pattern.
+          if (stats.period != StatsPeriod.today) ...[
+            const SizedBox(height: 24),
+            _SectionCard(child: SpendingHabitsSection(details: details)),
+          ],
+          const SizedBox(height: 24),
+          _SectionCard(
+            child: LargestExpensesSection(
+              expenses: details.largest,
+              onTap: onOpenExpense,
+            ),
+          ),
           const SizedBox(height: 20),
+          IntrinsicHeight(
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Expanded(
+                  child: _ActionTile(
+                    icon: Icons.file_download_outlined,
+                    color: const Color(0xFF3B82F6),
+                    title: 'Export',
+                    subtitle: 'This period as CSV',
+                    onTap: onExport,
+                  ),
+                ),
+                if (onCompare != null) ...[
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: _ActionTile(
+                      icon: Icons.compare_arrows_rounded,
+                      color: const Color(0xFF8B5CF6),
+                      title: 'Compare',
+                      subtitle: 'With the last period',
+                      onTap: onCompare!,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 12),
           _ViewAllExpensesButton(onTap: onViewAll),
         ],
       ],
@@ -126,6 +255,84 @@ class _StatsBody extends StatelessWidget {
 }
 
 /// Full-width CTA to the expense list screen, scoped to the active period.
+/// Square-ish action button: tinted icon, title and a one-line hint.
+class _ActionTile extends StatelessWidget {
+  const _ActionTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
+
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String subtitle;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: AppColors.surface,
+      borderRadius: BorderRadius.circular(16),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(16),
+        child: Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            borderRadius: BorderRadius.circular(16),
+            border: Border.all(color: AppColors.border),
+          ),
+          child: Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  color: color.withValues(alpha: 0.12),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Icon(icon, size: 20, color: color),
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      title,
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(
+                        fontSize: 14.5,
+                        fontWeight: FontWeight.w700,
+                        color: AppColors.textPrimary,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      subtitle,
+                      maxLines: 2,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        height: 1.25,
+                        color: AppColors.textSecondary,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
 class _ViewAllExpensesButton extends StatelessWidget {
   const _ViewAllExpensesButton({required this.onTap});
 
@@ -484,195 +691,6 @@ class _InsightTile extends StatelessWidget {
           ),
         ],
       ),
-    );
-  }
-}
-
-/// Bar chart of the period's buckets: the current bucket in full brand
-/// color, past ones a soft tint, future ones barely there; a dashed line
-/// marks the average; tapping a bar shows its exact amount.
-class _SpendingTrendSection extends StatelessWidget {
-  const _SpendingTrendSection({required this.stats});
-
-  final PeriodStats stats;
-
-  @override
-  Widget build(BuildContext context) {
-    final delta = stats.deltaPercent;
-    final buckets = stats.buckets;
-    final maxCents = buckets.fold(0, (m, b) => math.max(m, b.totalCents));
-    // Spending more than last period is the "watch out" direction.
-    final deltaColor = delta == null
-        ? AppColors.textSecondary
-        : delta >= 0
-        ? const Color(0xFFE5484D)
-        : const Color(0xFF2FB457);
-
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            const Expanded(
-              child: Text(
-                'Spending Trend',
-                style: TextStyle(
-                  fontSize: 15,
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.textPrimary,
-                ),
-              ),
-            ),
-            if (delta != null)
-              Icon(
-                delta >= 0
-                    ? Icons.arrow_upward_rounded
-                    : Icons.arrow_downward_rounded,
-                size: 14,
-                color: deltaColor,
-              ),
-            const SizedBox(width: 2),
-            Flexible(
-              child: Text(
-                delta == null
-                    ? 'Nothing last period'
-                    : '${delta.abs()}% vs last period',
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
-                  color: deltaColor,
-                ),
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 20),
-        SizedBox(
-          height: 150,
-          child: BarChart(
-            BarChartData(
-              maxY: math.max(maxCents, 1) / 100 * 1.25,
-              gridData: const FlGridData(show: false),
-              borderData: FlBorderData(show: false),
-              extraLinesData: ExtraLinesData(
-                horizontalLines: [
-                  if (stats.averageCents > 0)
-                    HorizontalLine(
-                      y: stats.averageCents / 100,
-                      color: AppColors.textSecondary.withValues(alpha: 0.35),
-                      strokeWidth: 1,
-                      dashArray: const [5, 4],
-                      label: HorizontalLineLabel(
-                        show: true,
-                        alignment: Alignment.topLeft,
-                        padding: const EdgeInsets.only(bottom: 4),
-                        style: const TextStyle(
-                          fontSize: 9.5,
-                          fontWeight: FontWeight.w700,
-                          color: AppColors.textSecondary,
-                        ),
-                        labelResolver: (_) => 'Avg',
-                      ),
-                    ),
-                ],
-              ),
-              barTouchData: BarTouchData(
-                enabled: true,
-                touchTooltipData: BarTouchTooltipData(
-                  getTooltipColor: (_) => AppColors.textPrimary,
-                  tooltipRoundedRadius: 8,
-                  tooltipPadding: const EdgeInsets.symmetric(
-                    horizontal: 8,
-                    vertical: 6,
-                  ),
-                  getTooltipItem: (group, groupIndex, rod, rodIndex) =>
-                      BarTooltipItem(
-                        formatMad(buckets[group.x].totalCents),
-                        const TextStyle(
-                          fontSize: 11,
-                          fontWeight: FontWeight.w700,
-                          color: Colors.white,
-                        ),
-                      ),
-                ),
-              ),
-              titlesData: FlTitlesData(
-                leftTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                topTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                rightTitles: const AxisTitles(
-                  sideTitles: SideTitles(showTitles: false),
-                ),
-                bottomTitles: AxisTitles(
-                  sideTitles: SideTitles(
-                    showTitles: true,
-                    reservedSize: 22,
-                    getTitlesWidget: (value, meta) {
-                      final i = value.toInt();
-                      if (i < 0 || i >= buckets.length) {
-                        return const SizedBox.shrink();
-                      }
-                      return Padding(
-                        padding: const EdgeInsets.only(top: 6),
-                        child: Text(
-                          // 12 month labels are too tight — first letter.
-                          stats.period == StatsPeriod.year
-                              ? buckets[i].label.substring(0, 1)
-                              : buckets[i].label,
-                          style: TextStyle(
-                            fontSize: 10.5,
-                            fontWeight: buckets[i].isCurrent(stats.now)
-                                ? FontWeight.w800
-                                : FontWeight.w600,
-                            color: buckets[i].isCurrent(stats.now)
-                                ? AppColors.textPrimary
-                                : AppColors.textSecondary,
-                          ),
-                        ),
-                      );
-                    },
-                  ),
-                ),
-              ),
-              barGroups: [
-                for (var i = 0; i < buckets.length; i++)
-                  BarChartGroupData(
-                    x: i,
-                    barRods: [
-                      BarChartRodData(
-                        toY: buckets[i].totalCents / 100,
-                        width: switch (stats.period) {
-                          StatsPeriod.week => 18,
-                          StatsPeriod.year => 12,
-                          _ => 14,
-                        },
-                        borderRadius: BorderRadius.circular(6),
-                        color: buckets[i].isCurrent(stats.now)
-                            ? AppColors.primary
-                            : buckets[i].isFuture(stats.now)
-                            ? AppColors.primary.withValues(alpha: 0.06)
-                            : AppColors.primary.withValues(alpha: 0.22),
-                        // Soft full-height track behind every bar, so empty
-                        // buckets still read as part of the axis.
-                        backDrawRodData: BackgroundBarChartRodData(
-                          show: true,
-                          toY: math.max(maxCents, 1) / 100 * 1.25,
-                          color: AppColors.background,
-                        ),
-                      ),
-                    ],
-                  ),
-              ],
-            ),
-          ),
-        ),
-      ],
     );
   }
 }

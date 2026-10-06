@@ -141,6 +141,41 @@ void main() {
     await disposeTree(tester);
   });
 
+  testWidgets('opens with a pre-picked category (Quick Add)', (tester) async {
+    final transport = (await tester.runAsync(
+      () => db.categoriesDao.findById(CatalogueSeeder.categoryId('Transport')),
+    ))!;
+    final taxi = (await tester.runAsync(
+      () => db.subcategoriesDao.findById(
+        CatalogueSeeder.subcategoryId('Transport', 'Taxi'),
+      ),
+    ))!;
+    tester.view
+      ..physicalSize = const Size(1179, 2556)
+      ..devicePixelRatio = 3;
+    addTearDown(tester.view.reset);
+    await tester.pumpWidget(
+      ProviderScope(
+        overrides: [appDatabaseProvider.overrideWithValue(db)],
+        child: MaterialApp(
+          home: AddExpenseScreen(
+            initialChoice: (category: transport, subcategory: taxi),
+          ),
+        ),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    expect(find.text('Taxi'), findsOneWidget);
+    expect(find.text('Choose category'), findsNothing);
+    expect(find.text('Enter an amount'), findsOneWidget); // only step left
+
+    await typeAmount(tester, '25');
+    expect(find.text('Save  ·  25.00 MAD'), findsOneWidget);
+
+    await disposeTree(tester);
+  });
+
   testWidgets('save without an amount stays on the screen', (tester) async {
     await pumpScreen(tester);
     await tester.tap(find.text('Enter an amount'));

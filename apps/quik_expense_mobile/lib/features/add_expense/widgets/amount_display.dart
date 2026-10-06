@@ -77,15 +77,19 @@ class _AmountDisplayState extends State<AmountDisplay>
               children: [
                 AnimatedDefaultTextStyle(
                   duration: const Duration(milliseconds: 150),
-                  style: TextStyle(
-                    fontSize: 72,
-                    height: 1.1,
-                    fontWeight: FontWeight.w700,
-                    letterSpacing: -2.5,
-                    fontFeatures: figures,
-                    color: isEmpty
-                        ? AppColors.textSecondary.withValues(alpha: 0.35)
-                        : AppColors.textPrimary,
+                  // Merge with the inherited style so the app font (Inter)
+                  // is kept — AnimatedDefaultTextStyle replaces, not merges.
+                  style: DefaultTextStyle.of(context).style.merge(
+                    TextStyle(
+                      fontSize: 72,
+                      height: 1.1,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: -2.5,
+                      fontFeatures: figures,
+                      color: isEmpty
+                          ? AppColors.textSecondary.withValues(alpha: 0.35)
+                          : AppColors.textPrimary,
+                    ),
                   ),
                   child: Text(display),
                 ),

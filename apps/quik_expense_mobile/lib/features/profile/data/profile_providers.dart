@@ -1,9 +1,9 @@
 import 'package:database/database.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
 
 import '../../../config/providers/database_providers.dart';
 import '../../../shared/formatters.dart';
+import '../../../shared/csv_export.dart';
 import 'profile_store.dart';
 
 /// All-time count / total / first date, for the profile header stats.
@@ -34,34 +34,8 @@ class DataActions {
   /// All expenses as CSV (oldest first), ready to paste into a spreadsheet.
   /// Returns the CSV and the row count.
   Future<(String, int)> exportCsv() async {
-    final rows = (await _db.expensesDao.watchDetails().first).reversed;
-    final date = DateFormat('yyyy-MM-dd');
-    final time = DateFormat('HH:mm');
-    final buffer = StringBuffer(
-      'Date,Time,Category,Subcategory,Amount (MAD),Note\n',
-    );
-    var count = 0;
-    for (final d in rows) {
-      final e = d.expense;
-      buffer.writeln(
-        [
-          date.format(e.date),
-          time.format(e.date),
-          _csv(d.category.name),
-          _csv(d.subcategory.name),
-          (e.amountCents / 100).toStringAsFixed(2),
-          _csv(e.note ?? ''),
-        ].join(','),
-      );
-      count++;
-    }
-    return (buffer.toString(), count);
-  }
-
-  /// Quotes a field when it contains a comma, quote or newline.
-  static String _csv(String value) {
-    if (!value.contains(RegExp(r'[",\n\r]'))) return value;
-    return '"${value.replaceAll('"', '""')}"';
+    final rows = await _db.expensesDao.watchDetails().first;
+    return (expensesCsv(rows), rows.length);
   }
 
   Future<int> deleteAllExpenses() => _db.expensesDao.softDeleteAll();

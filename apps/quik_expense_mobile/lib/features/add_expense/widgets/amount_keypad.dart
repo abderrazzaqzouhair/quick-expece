@@ -93,15 +93,15 @@ class _KeyState extends State<_Key> {
 
     final Widget glyph = switch (key) {
       AmountKey.backspace => const Icon(
-        Icons.backspace_outlined,
-        size: 24,
+        Icons.backspace_rounded,
+        size: 22,
         color: AppColors.textPrimary,
       ),
       _ => Text(
         key.symbol,
         style: const TextStyle(
-          fontSize: 30,
-          fontWeight: FontWeight.w500,
+          fontSize: 26,
+          fontWeight: FontWeight.w600,
           color: AppColors.textPrimary,
         ),
       ),
@@ -114,19 +114,18 @@ class _KeyState extends State<_Key> {
       child: Pressable(
         onTap: widget.onTap,
         onLongPress: widget.onLongPress,
-        pressedScale: 0.92,
+        pressedScale: 0.94,
         semanticLabel: _label,
         child: Padding(
           padding: const EdgeInsets.all(4),
+          // Soft tile on the white keypad panel; darkens while pressed.
           child: AnimatedContainer(
             duration: Duration(milliseconds: _down ? 60 : 240),
             height: widget.height,
             alignment: Alignment.center,
             decoration: BoxDecoration(
-              color: _down
-                  ? Colors.black.withValues(alpha: 0.07)
-                  : Colors.transparent,
-              borderRadius: BorderRadius.circular(18),
+              color: _down ? const Color(0xFFE4E6EA) : AppColors.background,
+              borderRadius: BorderRadius.circular(16),
             ),
             child: ExcludeSemantics(child: glyph),
           ),

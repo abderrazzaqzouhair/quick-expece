@@ -48,8 +48,11 @@ class AppSheetHeader extends StatelessWidget {
             borderRadius: BorderRadius.circular(3),
           ),
         ),
+        // Full width: without it the Stack shrinks to the title and the
+        // leading/trailing actions land on top of it.
         SizedBox(
           height: 52,
+          width: double.infinity,
           child: Stack(
             alignment: Alignment.center,
             children: [
